@@ -1,0 +1,23 @@
+# jumps forward.  To test result, make sure that the COPY_ALL opcode has 
+# not been executed.  if it has, this means the jump failed
+START
+UUU
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+CCC
+JUMP
+UUU
+STOP

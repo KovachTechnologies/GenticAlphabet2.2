@@ -1,0 +1,11 @@
+# copies code to progeny
+START
+IF
+COND
+COPY
+UUU
+CCC
+CCC
+CCC
+UUU
+STOP

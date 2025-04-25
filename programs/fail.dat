@@ -1,0 +1,5 @@
+# Should recognize START and STOP opcodes, but barf on FAIL opcode
+# Should run START STOP anyway
+START
+FAIL
+STOP

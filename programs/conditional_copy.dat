@@ -1,0 +1,10 @@
+# done NOT copy code to progeny because conditional flag is not set 
+START
+IF
+COPY
+UUU
+CCC
+CCC
+CCC
+UUU
+STOP

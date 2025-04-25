@@ -1,0 +1,2 @@
+# START with no matching STOP; should fail
+START
