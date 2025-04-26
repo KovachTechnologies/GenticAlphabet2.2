@@ -106,19 +106,19 @@ Best Code: AAAATC
 ```
 
 * Options:
- * `--population`: Number of agents (default: 50, max: parameters.MAX_PROGENY).
+  * `--population`: Number of agents (default: 50, max: parameters.MAX_PROGENY).
 
- * `--generations`: Generations per run (default: 100, max: parameters.MAX_ITERATIONS).
+  * `--generations`: Generations per run (default: 100, max: parameters.MAX_ITERATIONS).
 
- * `--max-steps`: Max execution steps per agent (default: parameters.MAX_ITERATIONS).
+  * `--max-steps`: Max execution steps per agent (default: parameters.MAX_ITERATIONS).
 
- * `--max-runs`: Number of simulation runs (default: 1).
+  * `--max-runs`: Number of simulation runs (default: 1).
 
- * `--input-file`: Path to file with initial genetic codes.
+  * `--input-file`: Path to file with initial genetic codes.
 
- * `--output-file`: Path to save simulation results.
+  * `--output-file`: Path to save simulation results.
 
- * `--verbose`: Enable detailed output (DYNAMIC_MODE).
+  * `--verbose`: Enable detailed output (DYNAMIC_MODE).
 
 * Interpreter Mode
 Interactively compile, decompile, or compress genetic code.
