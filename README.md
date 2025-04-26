@@ -149,46 +149,46 @@ python3 geneticeditor.py
 ```
 
 - Features:
- - Code Window: Enter high-level code (e.g., “START STOP”).
+  - Code Window: Enter high-level code (e.g., “START STOP”).
 
- - Compiled Window: Enter/view compiled codons (e.g., “AAAAUA”).
+  - Compiled Window: Enter/view compiled codons (e.g., “AAAAUA”).
 
- - Table: Displays current code and progeny_code during execution.
+  - Table: Displays current code and progeny_code during execution.
 
 - Buttons:
- - Compile: Convert high-level code to codons.
+  - Compile: Convert high-level code to codons.
 
- - Decompile: Convert codons to high-level code.
+  - Decompile: Convert codons to high-level code.
 
- - Load: Load compiled code into the agent.
+  - Load: Load compiled code into the agent.
 
- - Load Progeny: Load progeny_code into the agent.
+  - Load Progeny: Load progeny_code into the agent.
 
- - Mutate: Apply random mutations to compiled code.
+  - Mutate: Apply random mutations to compiled code.
 
- - Compress: Remove NO_OP codons from compiled code.
+  - Compress: Remove NO_OP codons from compiled code.
 
- - Run/Run All: Execute code continuously.
+  - Run/Run All: Execute code continuously.
 
- - Step: Execute one iteration.
+  - Step: Execute one iteration.
 
- - Stop: Halt continuous execution.
+  - Stop: Halt continuous execution.
 
 - Controls:
- - Max Iterations: Set execution limit (-1 for unlimited, up to 1000).
+  - Max Iterations: Set execution limit (-1 for unlimited, up to 1000).
 
- - Wait Interval: Set delay between iterations (default: 1.0 seconds).
+  - Wait Interval: Set delay between iterations (default: 1.0 seconds).
 
 - Example Workflow:
- - Enter “START STOP” in the Code Window.
+  - Enter “START STOP” in the Code Window.
 
- - Click Compile to get “AAAAUA” in the Compiled Window.
+  - Click Compile to get “AAAAUA” in the Compiled Window.
 
- - Click Load to initialize the agent and populate the table.
+  - Click Load to initialize the agent and populate the table.
 
- - Click Step to execute one iteration or Run for continuous execution.
+  - Click Step to execute one iteration or Run for continuous execution.
 
- - Click Load Progeny to view progeny_code results.
+  - Click Load Progeny to view progeny_code results.
 
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details (create one if needed).
