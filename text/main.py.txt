@@ -72,7 +72,7 @@ def write_output_file(filepath: str, run_number: int, best_agent: Optional['Agen
 
 def run_simulation(population_size: int, generations: int, max_steps: int, max_runs: int, 
                    input_file: Optional[str], output_file: Optional[str], verbose: bool, 
-                   should_compile: bool = True, target_peptide: Optional[str] = None) -> None:
+                   should_compile: bool = True) -> None:
     """
     Run genetic simulations with the specified parameters.
 
@@ -85,7 +85,6 @@ def run_simulation(population_size: int, generations: int, max_steps: int, max_r
         output_file: Optional path to output file for results.
         verbose: If True, enable DYNAMIC_MODE for detailed output.
         should_compile: If True, compile input file codes before use.
-        target_peptide: Optional target peptide sequence to search for.
     """
     parameters.DYNAMIC_MODE = verbose
     population_size = min(population_size, parameters.MAX_PROGENY)
@@ -102,8 +101,7 @@ def run_simulation(population_size: int, generations: int, max_steps: int, max_r
     for run in range(1, max_runs + 1):
         logging.info("Running simulation %d/%d...", run, max_runs)
         sim = Simulation(population_size=population_size, max_generations=generations, 
-                         max_steps=max_steps, initial_codes=initial_codes, max_attempts=100,
-                         target_peptide=target_peptide)
+                         max_steps=max_steps, initial_codes=initial_codes, max_attempts=100)
         best_agent = sim.run_simulation()
 
         # Log results
@@ -143,7 +141,6 @@ def main():
                         help="Enable verbose logging (DYNAMIC_MODE)")
     parser.add_argument("--compile", action="store_true", 
                         help="Compile input file codes before simulation")
-    parser.add_argument("--target-peptide", type=str, help="Target peptide sequence to search for")
 
     args = parser.parse_args()
 
@@ -154,7 +151,7 @@ def main():
     if args.mode == "simulation":
         run_simulation(args.population_size, args.generations, args.max_steps, 
                        args.max_runs, args.input_file, args.output_file, 
-                       args.verbose, args.compile, args.target_peptide)
+                       args.verbose, args.compile)
     elif args.mode == "interpreter":
         run_interpreter(args.input_file, args.verbose)
     elif args.mode == "cross-reference":
@@ -167,8 +164,7 @@ def main():
             max_steps=args.max_steps,
             num_random=args.num_random,
             initial_codes=initial_codes,
-            output_prefix="cross_reference",
-            target_peptide=args.target_peptide
+            output_prefix="cross_reference"
         )
 
 if __name__ == "__main__":

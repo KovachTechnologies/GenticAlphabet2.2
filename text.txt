@@ -1,0 +1,2004 @@
+agent.py
+#!/usr/bin/env python3
+
+"""Agent class for genetic simulations in GeneticAlphabet2.2."""
+
+import logging
+import random
+import parameters
+import genetic_strings
+from typing import Optional, List
+
+class Agent:
+    def __init__(self, family_id: int):
+        """
+        Initialize an agent with a unique family ID.
+
+        Args:
+            family_id: Unique identifier for the agent's family.
+        """
+        self.family_id = family_id
+        self.code: str = ""
+        self.progeny_code: str = ""
+        self.program_counter: int = 0
+        self.eip_ptr: Optional[int] = None
+        self.valid: bool = False
+        self.tape: List[str] = []
+
+    def init(self, code: str, progeny_code: Optional[str] = None) -> bool:
+        """
+        Initialize the agent with genetic code.
+
+        Args:
+            code: Genetic code string (sequence of codons).
+            progeny_code: Optional initial progeny code.
+
+        Returns:
+            True if initialization is successful, False otherwise.
+        """
+        # Allow short codes (at least one codon)
+        if not code or len(code) < parameters.CODON_SIZE or len(code) % parameters.CODON_SIZE != 0:
+            logging.error("Invalid code for agent (family_id=%d): %s", self.family_id, code)
+            return False
+
+        # Tokenize code into codons
+        self.tape = [code[i:i + parameters.CODON_SIZE] 
+                     for i in range(0, len(code), parameters.CODON_SIZE)]
+        
+        # Validate codons (operations or valid nucleotides)
+        self.valid = len(self.tape) > 0 and all(
+            codon in sum(parameters.OPERATIONS.values(), []) or 
+            all(c in 'ATGCU' for c in codon) 
+            for codon in self.tape
+        )
+        
+        if not self.valid:
+            logging.error("Invalid code for agent (family_id=%d): %s", self.family_id, code)
+            return False
+
+        self.code = code
+        self.progeny_code = progeny_code or ""
+        self.program_counter = 0
+        self.eip_ptr = None
+        logging.debug("Agent (family_id=%d) initialized with code: %s", self.family_id, code)
+        return True
+
+    def iteration(self) -> bool:
+        """
+        Execute one iteration of the agent's genetic code.
+
+        Returns:
+            True if execution is complete, False if more iterations are needed.
+        """
+        if not self.valid or self.program_counter >= len(self.tape):
+            logging.debug("Execution complete for agent (family_id=%d): progeny_code=%s, PC=%d", 
+                          self.family_id, self.progeny_code, self.program_counter)
+            return True
+
+        codon = self.tape[self.program_counter]
+        logging.debug("Processing codon: %s at PC=%d", codon, self.program_counter)
+        
+        # Handle operations
+        if codon in parameters.OPERATIONS["COPY"]:
+            self.progeny_code += codon
+            self.program_counter += 1
+            logging.debug("COPY: Added %s to progeny_code", codon)
+        elif codon in parameters.OPERATIONS["START"]:
+            self.eip_ptr = self.program_counter
+            self.program_counter += 1
+            logging.debug("START: Set eip_ptr to %d", self.eip_ptr)
+        elif codon in parameters.OPERATIONS["STOP"]:
+            self.program_counter += 1
+            logging.debug("STOP: Execution complete")
+            return True
+        else:
+            # Treat unrecognized codons as data
+            self.progeny_code += codon
+            self.program_counter += 1
+            logging.debug("DATA: Added %s to progeny_code", codon)
+
+        if parameters.DYNAMIC_MODE:
+            logging.debug("progeny_code=%s, program_counter=%d", 
+                          self.progeny_code, self.program_counter)
+        return False
+
+    def mutate(self) -> None:
+        """
+        Mutate the agent's code using genetic_strings.mutate.
+        """
+        if not self.code:
+            logging.warning("Attempted to mutate empty code for agent (family_id=%d)", 
+                            self.family_id)
+            return
+        self.code = genetic_strings.mutate(self.code)
+        # Reinitialize to validate mutated code
+        self.init(self.code, self.progeny_code)
+
+    def evaluate_fitness(self) -> float:
+        """
+        Evaluate the fitness of the agent's progeny code.
+
+        Returns:
+            Fitness score (e.g., based on code length and entropy).
+        """
+        if not self.progeny_code:
+            return 0.0
+        # Simple fitness: length * entropy
+        entropy = genetic_strings.entropy(self.progeny_code)
+        return len(self.progeny_code) * entropy
+
+    def generate_random_code(self, length: int = 30) -> str:
+        """
+        Generate a random genetic code.
+
+        Args:
+            length: Length of the code (default: 30).
+
+        Returns:
+            Random genetic code string.
+        """
+        nucleotides = 'ATGCU'
+        return ''.join(random.choice(nucleotides) for _ in range(length))
+
+    def reset(self) -> None:
+        """
+        Reset the agent's state.
+        """
+        self.code = ""
+        self.progeny_code = ""
+        self.program_counter = 0
+        self.eip_ptr = None
+        self.valid = False
+        self.tape = []
+
+if __name__ == "__main__":
+    import unittest
+
+    class TestAgent(unittest.TestCase):
+        def setUp(self):
+            self.agent = Agent(family_id=0)
+            parameters.OPERATIONS = {
+                "START": ["AAA"],
+                "STOP": ["AUA"],
+                "COPY": ["AGA"]
+            }
+            parameters.CODON_SIZE = 3
+            parameters.DYNAMIC_MODE = True
+
+        def test_init_valid_code(self):
+            """Test initialization with valid code."""
+            self.assertTrue(self.agent.init("AAAAAA"))
+            self.assertEqual(self.agent.code, "AAAAAA")
+            self.assertEqual(self.agent.tape, ["AAA", "AAA"])
+
+        def test_init_invalid_code(self):
+            """Test initialization with invalid code."""
+            with self.assertLogs(level='ERROR') as cm:
+                self.assertFalse(self.agent.init("INVALID"))
+                self.assertIn("Invalid code for agent (family_id=0): INVALID", 
+                              cm.output[0])
+
+        def test_iteration_copy(self):
+            """Test iteration with COPY operation."""
+            self.agent.init("AGAAGA")
+            self.assertFalse(self.agent.iteration())  # First COPY
+            self.assertEqual(self.agent.progeny_code, "AGA")
+            self.assertFalse(self.agent.iteration())  # Second COPY
+            self.assertEqual(self.agent.progeny_code, "AGAAGA")
+            self.assertTrue(self.agent.iteration())  # End of code
+            self.assertEqual(self.agent.progeny_code, "AGAAGA")
+
+        def test_iteration_short_code(self):
+            """Test iteration with short code."""
+            self.agent.init("AAA")
+            self.assertFalse(self.agent.iteration())  # Data codon (START or data)
+            self.assertEqual(self.agent.progeny_code, "AAA")
+            self.assertTrue(self.agent.iteration())  # End of code
+
+        def test_mutate(self):
+            """Test mutation of code."""
+            self.agent.init("AAAAAA")
+            with patch('genetic_strings.mutate', return_value="AAACCC"):
+                self.agent.mutate()
+                self.assertEqual(self.agent.code, "AAACCC")
+
+        def test_evaluate_fitness(self):
+            """Test fitness evaluation."""
+            self.agent.init("AAAAAA")
+            self.agent.progeny_code = "AAAAAA"
+            with patch('genetic_strings.entropy', return_value=1.0):
+                fitness = self.agent.evaluate_fitness()
+                self.assertEqual(fitness, 6.0)
+
+    unittest.main()
+checks.py
+#!/usr/bin/env python3
+
+"""Verification methods for genetic programs."""
+
+from typing import List
+import parameters
+
+def check_list(code: str) -> bool:
+    """
+    Verify that a genetic code string is valid.
+
+    A valid code string must:
+    - Be non-empty.
+    - Have a length that is a multiple of CODON_SIZE.
+    - Consist only of codons from parameters.INSTRUCTIONS.
+
+    Args:
+        code: The genetic code string to validate.
+
+    Returns:
+        True if the code is valid, False otherwise.
+    """
+    if not code:
+        return False
+
+    if len(code) % parameters.CODON_SIZE != 0:
+        return False
+
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    return all(codon in parameters.INSTRUCTIONS for codon in tape)
+
+def is_executable(instruction_list: List[str]) -> bool:
+    """
+    Check if a list of instructions forms an executable program.
+
+    An executable program must have at least one START instruction followed by
+    at least one STOP instruction in the sequence.
+
+    Args:
+        instruction_list: List of codons to check.
+
+    Returns:
+        True if the program is executable, False otherwise.
+    """
+    if not instruction_list:
+        return False
+
+    start_found = False
+    for i, instruction in enumerate(instruction_list):
+        if instruction in parameters.OPERATIONS["START"]:
+            start_found = True
+            for j in range(i, len(instruction_list)):
+                if instruction_list[j] in parameters.OPERATIONS["STOP"]:
+                    return True
+    return False
+cross_reference.py
+#!/usr/bin/env python3
+
+"""Module for cross-referencing framework-generated genetic code with random sequences."""
+
+import datetime
+import os
+import random
+import logging
+import pandas as pd
+import matplotlib.pyplot as plt
+from collections import Counter
+from typing import List, Dict
+import parameters
+import genetic_strings
+from agent import Agent
+from simulation import Simulation
+
+# Directories for outputs
+DATA_DIR = "data/cross_reference"
+GRAPHS_DIR = "graphs/cross_reference"
+
+# Codon table for amino acid translation (from protein_sequences.py)
+CODON_TABLE = {
+    "UUU": {"name": "Phenylalanine", "abbr": "Phe", "letter": "F"},
+    "UUC": {"name": "Phenylalanine", "abbr": "Phe", "letter": "F"},
+    "UUA": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "UUG": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUU": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUC": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUA": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUG": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "AUU": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUC": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUA": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUG": {"name": "Methionine", "abbr": "Met", "letter": "M", "notes": "Starting Codon"},
+    "GUU": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUC": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUA": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUG": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "UCU": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCC": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCA": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCG": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "CCU": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCC": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCA": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCG": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "ACU": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACC": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACA": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACG": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "GCU": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCC": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCA": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCG": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "UAU": {"name": "Tyrosine", "abbr": "Tyr", "letter": "Y"},
+    "UAC": {"name": "Tyrosine", "abbr": "Tyr", "letter": "Y"},
+    "UAA": {"name": "Stop", "notes": "codon"},
+    "UAG": {"name": "Stop", "notes": "codon"},
+    "CAU": {"name": "Histidine", "abbr": "His", "letter": "H"},
+    "CAC": {"name": "Histidine", "abbr": "His", "letter": "H"},
+    "CAA": {"name": "Glutamine", "abbr": "Gln", "letter": "Q"},
+    "CAG": {"name": "Glutamine", "abbr": "Gln", "letter": "Q"},
+    "AAU": {"name": "Asparagine", "abbr": "Asn", "letter": "N"},
+    "AAC": {"name": "Asparagine", "abbr": "Asn", "letter": "N"},
+    "AAA": {"name": "Lysine", "abbr": "Lys", "letter": "K"},
+    "AAG": {"name": "Lysine", "abbr": "Lys", "letter": "K"},
+    "GAU": {"name": "Aspartic", "abbr": "Asp", "letter": "D"},
+    "GAC": {"name": "Aspartic", "abbr": "Asp", "letter": "D"},
+    "GAA": {"name": "Glutamic", "abbr": "Glu", "letter": "E"},
+    "GAG": {"name": "Glutamic", "abbr": "Glu", "letter": "E"},
+    "UGU": {"name": "Cysteine", "abbr": "Cys", "letter": "C"},
+    "UGC": {"name": "Cysteine", "abbr": "Cys", "letter": "C"},
+    "UGA": {"name": "Stop", "notes": "codon"},
+    "UGG": {"name": "Tryptophan", "abbr": "Trp", "letter": "W"},
+    "CGU": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGC": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGA": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGG": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "AGU": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "AGC": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "AGA": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "AGG": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "GGU": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGC": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGA": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGG": {"name": "Glycine", "abbr": "Gly", "letter": "G"}
+}
+
+def ensure_directories():
+    """Create data and graphs directories if they don't exist."""
+    for directory in [DATA_DIR, GRAPHS_DIR]:
+        if not os.path.exists(directory):
+            logging.info(f"Creating directory: {directory}")
+            os.makedirs(directory)
+
+def get_nucleotides(code: str) -> str:
+    """Translate genetic code to amino acid sequence using codon table."""
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    amino_acids = ""
+    for codon in tape:
+        if codon in CODON_TABLE and "letter" in CODON_TABLE[codon]:
+            amino_acids += CODON_TABLE[codon]["letter"]
+    return amino_acids
+
+def generate_random_sequences(n: int, lower_bound: int = 7, upper_bound: int = 100) -> List[str]:
+    """Generate random amino acid sequences."""
+    letters = list(set([CODON_TABLE[key]["letter"] for key in CODON_TABLE if "letter" in CODON_TABLE[key]]))
+    sequences = []
+    for _ in range(n):
+        length = random.randint(lower_bound, upper_bound)
+        sequence = "".join(random.choice(letters) for _ in range(length))
+        sequences.append(sequence)
+    return sequences
+
+def collect_framework_sequences(population_size: int, max_generations: int, max_steps: int, 
+                               initial_codes: List[str] = None) -> List[str]:
+    """Run simulation and collect progeny codes."""
+    sim = Simulation(population_size=population_size, max_generations=max_generations, 
+                     max_steps=max_steps, initial_codes=initial_codes)
+    best_agent = sim.run_simulation()
+    sequences = []
+    for agent in sim.population:
+        if agent.progeny_code:
+            sequences.append(agent.progeny_code)
+    if best_agent and best_agent.progeny_code:
+        sequences.append(best_agent.progeny_code)
+    return sequences
+
+def cross_reference_sequences(framework_sequences: List[str], random_sequences: List[str], 
+                             output_prefix: str = "cross_reference") -> None:
+    """Cross-reference framework and random sequences, saving results and visualizations."""
+    ensure_directories()
+    
+    # Convert framework sequences to amino acid sequences
+    framework_amino = [get_nucleotides(seq) for seq in framework_sequences if seq]
+    framework_amino = [seq for seq in framework_amino if seq]  # Filter empty sequences
+    
+    # Compute metrics
+    data = {
+        "type": [],
+        "sequence": [],
+        "length": [],
+        "entropy": [],
+        "amino_count": []
+    }
+    
+    # Process framework sequences
+    for seq, amino_seq in zip(framework_sequences, framework_amino):
+        data["type"].append("framework")
+        data["sequence"].append(amino_seq)
+        data["length"].append(len(amino_seq))
+        data["entropy"].append(genetic_strings.entropy(seq) if seq else 0.0)
+        data["amino_count"].append(len(set(amino_seq)))
+    
+    # Process random sequences
+    for seq in random_sequences:
+        data["type"].append("random")
+        data["sequence"].append(seq)
+        data["length"].append(len(seq))
+        data["entropy"].append(0.0)  # Random sequences are amino acids, not codons
+        data["amino_count"].append(len(set(seq)))
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Save results to CSV
+    dt = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    csv_path = os.path.join(DATA_DIR, f"{output_prefix}_{dt}.csv")
+    df.to_csv(csv_path, index=False)
+    logging.info(f"Saved cross-reference data to {csv_path}")
+    
+    # Generate visualizations
+    # 1. Length distribution histogram
+    plt.figure(figsize=(8, 6))
+    df[df["type"] == "framework"]["length"].hist(alpha=0.5, label="Framework", bins=20)
+    df[df["type"] == "random"]["length"].hist(alpha=0.5, label="Random", bins=20)
+    plt.xlabel("Sequence Length")
+    plt.ylabel("Frequency")
+    plt.title("Length Distribution of Framework vs Random Sequences")
+    plt.legend()
+    length_plot_path = os.path.join(GRAPHS_DIR, f"{output_prefix}_length_{dt}.png")
+    plt.savefig(length_plot_path, dpi=300)
+    plt.close()
+    logging.info(f"Saved length distribution plot to {length_plot_path}")
+    
+    # 2. Amino acid count scatter plot
+    plt.figure(figsize=(8, 6))
+    plt.scatter(df[df["type"] == "framework"]["length"], 
+                df[df["type"] == "framework"]["amino_count"], 
+                alpha=0.5, label="Framework")
+    plt.scatter(df[df["type"] == "random"]["length"], 
+                df[df["type"] == "random"]["amino_count"], 
+                alpha=0.5, label="Random")
+    plt.xlabel("Sequence Length")
+    plt.ylabel("Unique Amino Acids")
+    plt.title("Amino Acid Diversity vs Sequence Length")
+    plt.legend()
+    scatter_plot_path = os.path.join(GRAPHS_DIR, f"{output_prefix}_amino_count_{dt}.png")
+    plt.savefig(scatter_plot_path, dpi=300)
+    plt.close()
+    logging.info(f"Saved amino acid count plot to {scatter_plot_path}")
+    
+    # Log summary statistics
+    framework_stats = df[df["type"] == "framework"].describe()
+    random_stats = df[df["type"] == "random"].describe()
+    logging.info("Framework Sequence Statistics:\n%s", framework_stats)
+    logging.info("Random Sequence Statistics:\n%s", random_stats)
+
+def run_cross_reference(population_size: int = 10, max_generations: int = 10, 
+                        max_steps: int = 100, num_random: int = 100, 
+                        initial_codes: List[str] = None, output_prefix: str = "cross_reference") -> None:
+    """Run cross-referencing experiment."""
+    logging.info("Starting cross-reference experiment")
+    
+    # Collect framework sequences
+    framework_sequences = collect_framework_sequences(population_size, max_generations, 
+                                                     max_steps, initial_codes)
+    logging.info(f"Collected {len(framework_sequences)} framework sequences")
+    
+    # Generate random sequences
+    random_sequences = generate_random_sequences(num_random)
+    logging.info(f"Generated {len(random_sequences)} random sequences")
+    
+    # Cross-reference and save results
+    cross_reference_sequences(framework_sequences, random_sequences, output_prefix)
+    logging.info("Cross-reference experiment completed")
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Cross-reference framework and random genetic sequences")
+    parser.add_argument("--population-size", type=int, default=10, help="Population size for simulation")
+    parser.add_argument("--max-generations", type=int, default=10, help="Maximum generations for simulation")
+    parser.add_argument("--max-steps", type=int, default=100, help="Maximum steps per agent")
+    parser.add_argument("--num-random", type=int, default=100, help="Number of random sequences to generate")
+    parser.add_argument("--input-file", type=str, help="Input file with initial codes")
+    parser.add_argument("--output-prefix", type=str, default="cross_reference", help="Prefix for output files")
+    parser.add_argument("--log-file", type=str, default="cross_reference.log", help="Log file path")
+    
+    args = parser.parse_args()
+    
+    # Setup logging
+    logging.basicConfig(filename=args.log_file, level=logging.INFO, 
+                        format="%(asctime)s %(levelname)s %(message)s")
+    
+    # Load initial codes if provided
+    initial_codes = None
+    if args.input_file:
+        with open(args.input_file, 'r') as f:
+            initial_codes = [line.strip() for line in f if line.strip()]
+    
+    run_cross_reference(args.population_size, args.max_generations, args.max_steps, 
+                        args.num_random, initial_codes, args.output_prefix)
+genetic_strings.py
+#!/usr/bin/env python3
+
+"""String processing and mutation operations for genetic sequences."""
+
+from typing import List
+import math
+import random
+import parameters
+
+def entropy(code: str) -> float:
+    """
+    Calculate the entropy of a genetic code string based on codon frequencies.
+
+    Args:
+        code: The genetic code string.
+
+    Returns:
+        The entropy value, or 0.0 if the code is empty.
+    """
+    if not code:
+        return 0.0
+
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    histogram = {instr: 0 for instr in parameters.INSTRUCTIONS}
+    for codon in tape:
+        histogram[codon] += 1
+
+    total = sum(histogram.values())
+    if total == 0:
+        return 0.0
+
+    squared_sum = sum((count / total) ** 2 for count in histogram.values())
+    return -2.0 * float(math.log(math.sqrt(squared_sum), 64))
+
+def create_codon() -> str:
+    """
+    Generate a random codon from the instruction set.
+
+    Returns:
+        A randomly selected codon from parameters.INSTRUCTIONS.
+    """
+    return random.choice(parameters.INSTRUCTIONS)
+
+def create_string() -> str:
+    """
+    Create a random genetic code string.
+
+    The string length is randomly chosen between MIN_GENE_SIZE and MID_GENE_SIZE
+    (in codons), and consists of random codons.
+
+    Returns:
+        A random genetic code string.
+    """
+    str_size = random.randrange(parameters.MIN_GENE_SIZE, parameters.MID_GENE_SIZE)
+    return ''.join(create_codon() for _ in range(str_size))
+
+def mutate(code: str) -> str:
+    """
+    Apply a random mutation to a genetic code string.
+
+    Mutations include:
+    - Append: Add a codon to the end.
+    - Prepend: Add a codon to the beginning.
+    - Insert: Insert a codon at a random position.
+    - Rewrite: Replace a codon at a random position.
+    - Remove: Delete a random codon.
+    - Swap: Swap two random codons.
+    - Reverse: Reverse the entire string.
+    - No-op: No change (for some random choices).
+
+    Args:
+        code: The genetic code string to mutate.
+
+    Returns:
+        The mutated code string.
+    """
+    if not code:
+        return code
+
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    mutation_index = random.choice(range(10))  # 0-9, some are no-ops
+
+    if mutation_index == 0 and len(tape) + 1 <= parameters.MAX_GENE_SIZE:
+        tape.append(create_codon())  # Append
+    elif mutation_index == 1 and len(tape) + 1 <= parameters.MAX_GENE_SIZE:
+        tape.insert(0, create_codon())  # Prepend
+    elif mutation_index == 2 and len(tape) + 1 <= parameters.MAX_GENE_SIZE:
+        tape.insert(random.randrange(0, len(tape)), create_codon())  # Insert
+    elif mutation_index == 3 and tape:
+        tape[random.randrange(0, len(tape))] = create_codon()  # Rewrite
+    elif mutation_index == 4 and len(tape) > parameters.MIN_GENE_SIZE:
+        tape.pop(random.randrange(0, len(tape)))  # Remove
+    elif mutation_index == 5 and len(tape) >= 2:
+        idx1, idx2 = random.sample(range(len(tape)), 2)
+        tape[idx1], tape[idx2] = tape[idx2], tape[idx1]  # Swap
+    elif mutation_index == 6:
+        tape.reverse()  # Reverse
+
+    return ''.join(tape)
+geneticeditor.py
+#!/usr/bin/env python3
+
+"""Genetic Editor GUI for GeneticAlphabet2.2."""
+
+from PyQt5 import QtCore, QtGui, QtWidgets
+from interpreter import compile_code, decompile_code, tokenize_code
+from agent import Agent
+
+class Ui_MainWindow(object):
+    def __init__(self):
+        self.a = Agent(family_id=0)
+        self.eip_ptr = None
+        self.progeny = ""
+
+    def setupUi(self, MainWindow):
+        MainWindow.setObjectName("MainWindow")
+        MainWindow.resize(800, 600)
+        self.centralwidget = QtWidgets.QWidget(MainWindow)
+        self.centralwidget.setObjectName("centralwidget")
+        self.codeWindow = QtWidgets.QTextBrowser(self.centralwidget)
+        self.codeWindow.setGeometry(QtCore.QRect(10, 10, 381, 192))
+        self.codeWindow.setObjectName("codeWindow")
+        self.compiledWindow = QtWidgets.QTextBrowser(self.centralwidget)
+        self.compiledWindow.setGeometry(QtCore.QRect(400, 10, 381, 192))
+        self.compiledWindow.setObjectName("compiledWindow")
+        self.tableData = QtWidgets.QTableWidget(self.centralwidget)
+        self.tableData.setGeometry(QtCore.QRect(10, 210, 771, 341))
+        self.tableData.setObjectName("tableData")
+        self.tableData.setColumnCount(0)
+        self.tableData.setRowCount(0)
+        MainWindow.setCentralWidget(self.centralwidget)
+        self.statusbar = QtWidgets.QStatusBar(MainWindow)
+        self.statusbar.setObjectName("statusbar")
+        MainWindow.setStatusBar(self.statusbar)
+
+        self.retranslateUi(MainWindow)
+        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+
+    def retranslateUi(self, MainWindow):
+        _translate = QtCore.QCoreApplication.translate
+        MainWindow.setWindowTitle(_translate("MainWindow", "Genetic Editor"))
+
+    def compileCode(self):
+        """Compile code from codeWindow to compiledWindow."""
+        code = self.codeWindow.toPlainText()
+        if code == "":
+            return 1
+        compiled = compile_code(code.split("\n"))
+        self.compiledWindow.setText(compiled)
+        return 0
+
+    def decompileCode(self):
+        """Decompile code from compiledWindow to codeWindow."""
+        code = self.compiledWindow.toPlainText()
+        if code == "":
+            return 1
+        decompiled = decompile_code(code)
+        self.codeWindow.setText(decompiled)
+        return 0
+
+    def loadData(self):
+        """Load code from compiledWindow into tableData."""
+        self.tableData.setRowCount(0)
+        code = self.compiledWindow.toPlainText()
+        tokens = tokenize_code(code)
+        if self.a.init(code):
+            self.tableData.setColumnCount(len(tokens))
+            self.tableData.insertRow(self.tableData.rowCount())
+            for col, token in enumerate(tokens):
+                self.tableData.setItem(0, col, QtWidgets.QTableWidgetItem(token))
+            self.statusbar.showMessage("Data Loaded!")
+        else:
+            self.statusbar.showMessage("Code not executable!")
+
+    def loadProgenyCode(self):
+        """Load progeny code into tableData."""
+        self.tableData.setRowCount(0)
+        code = self.progeny
+        tokens = tokenize_code(code)
+        if self.a.init(code):
+            self.tableData.setColumnCount(len(tokens))
+            self.tableData.insertRow(self.tableData.rowCount())
+            for col, token in enumerate(tokens):
+                self.tableData.setItem(0, col, QtWidgets.QTableWidgetItem(token))
+            self.statusbar.showMessage("Data Loaded!")
+        else:
+            self.statusbar.showMessage("Code not executable!")
+
+if __name__ == "__main__":
+    import sys
+    app = QtWidgets.QApplication(sys.argv)
+    MainWindow = QtWidgets.QMainWindow()
+    ui = Ui_MainWindow()
+    ui.setupUi(MainWindow)
+    MainWindow.show()
+    sys.exit(app.exec_())
+interpreter.py
+#!/usr/bin/env python3
+
+"""Interpreter for executing genetic code interactively."""
+
+import logging
+import os
+import parameters
+from agent import Agent
+from typing import Optional
+
+def compile_code(lines: list) -> str:
+    """
+    Compile high-level genetic code into executable code.
+
+    Args:
+        lines: List of high-level operation names or codons.
+
+    Returns:
+        Compiled genetic code as a string.
+    """
+    compiled = ""
+    for line in lines:
+        line = line.strip().upper()
+        if not line or line.startswith('#'):
+            continue
+        # Split space-separated operations
+        operations = line.split()
+        for op in operations:
+            if op in parameters.OPERATIONS:
+                compiled += parameters.OPERATIONS[op][0]
+            elif len(op) >= parameters.CODON_SIZE and all(c in 'ATGCU' for c in op):
+                # Handle codon sequences
+                codons = [op[i:i + parameters.CODON_SIZE] 
+                          for i in range(0, len(op), parameters.CODON_SIZE)]
+                compiled += ''.join(codons)
+            else:
+                logging.warning("Skipping invalid instruction: %s", op)
+    return compiled
+
+def decompile_code(code: str) -> str:
+    """
+    Decompile genetic code into high-level operations.
+
+    Args:
+        code: Genetic code string.
+
+    Returns:
+        Decompiled code as a string.
+    """
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    decompiled = []
+    for codon in tape:
+        for op, codons in parameters.OPERATIONS.items():
+            if codon in codons:
+                decompiled.append(op)
+                break
+        else:
+            decompiled.append(codon)
+    return " ".join(decompiled)
+
+def tokenize_code(execution_string: str) -> list:
+    """
+    Tokenize genetic code into codons.
+
+    Args:
+        execution_string: Genetic code string.
+
+    Returns:
+        List of codons.
+    """
+    return [execution_string[i:i + parameters.CODON_SIZE] 
+            for i in range(0, len(execution_string), parameters.CODON_SIZE)]
+
+def compress_code(execution_string: str) -> str:
+    """
+    Compress genetic code by keeping only operational codons.
+
+    Args:
+        execution_string: Genetic code string.
+
+    Returns:
+        Compressed genetic code string.
+    """
+    tape = [execution_string[i:i + parameters.CODON_SIZE] 
+            for i in range(0, len(execution_string), parameters.CODON_SIZE)]
+    compressed = [codon for codon in tape if any(codon in codons for op, codons in parameters.OPERATIONS.items())]
+    return "".join(compressed)
+
+def run_interpreter(input_file: Optional[str] = None, verbose: bool = False) -> None:
+    """
+    Run an interactive interpreter for genetic code execution.
+
+    Args:
+        input_file: Optional file with commands to execute.
+        verbose: If True, enable DYNAMIC_MODE for detailed logging.
+    """
+    parameters.DYNAMIC_MODE = verbose
+    agent = Agent(family_id=0)
+    logging.info("Starting genetic code interpreter. Type 'quit' to exit.")
+
+    if input_file:
+        if not os.path.exists(input_file):
+            logging.error("Input file does not exist: %s", input_file)
+            return
+        with open(input_file, 'r') as f:
+            commands = f.readlines()
+    else:
+        commands = []
+
+    command_buffer = []
+    while True:
+        if commands:
+            command = commands.pop(0).strip()
+            print(f"> {command}")
+        else:
+            command = input("> ").strip()
+
+        if command.lower() == "quit":
+            logging.info("Exiting interpreter")
+            break
+
+        if command.lower() == "compile":
+            if command_buffer:
+                compiled = compile_code(command_buffer)
+                logging.debug("Compiled code: %s", compiled)
+                print(compiled)
+                command_buffer = []
+            else:
+                logging.warning("No code to compile")
+            continue
+
+        if command.lower() == "decompile":
+            if command_buffer and len(command_buffer) == 1:
+                decompiled = decompile_code(command_buffer[0])
+                logging.debug("Decompiled code: %s", decompiled)
+                print(decompiled)
+                command_buffer = []
+            else:
+                logging.warning("Provide one compiled code line to decompile")
+            continue
+
+        if command.lower() == "run":
+            if command_buffer and len(command_buffer) == 1:
+                code = command_buffer[0]
+                logging.debug("Running code: %s", code)
+                if agent.init(code):
+                    try:
+                        while not agent.iteration():
+                            if parameters.DYNAMIC_MODE:
+                                logging.debug("Progeny code: %s, PC: %d", 
+                                             agent.progeny_code, agent.program_counter)
+                        logging.info("Execution complete. Progeny code: %s", agent.progeny_code)
+                        print(f"Progeny code: {agent.progeny_code}")
+                    except Exception as e:
+                        logging.error("Execution failed: %s", str(e))
+                        print(f"Execution failed: {str(e)}")
+                else:
+                    logging.error("Invalid code: %s", code)
+                    print(f"Invalid code: {code}")
+                command_buffer = []
+            else:
+                logging.warning("Provide one compiled code line to run")
+            continue
+
+        command_buffer.append(command)
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Genetic Code Interpreter")
+    parser.add_argument("--input-file", type=str, help="Input file with commands")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+    run_interpreter(args.input_file, args.verbose)
+main.py
+#!/usr/bin/env python3
+
+"""Main entry point for GeneticAlphabet2.2 framework."""
+
+import argparse
+import logging
+import os
+import sys
+from typing import Optional, List
+import parameters
+from interpreter import run_interpreter, compile_code
+from simulation import Simulation
+import cross_reference
+
+def load_input_file(filepath: str, should_compile: bool = True) -> List[str]:
+    """
+    Load genetic codes from an input file.
+
+    Args:
+        filepath: Path to the input file.
+        should_compile: If True, compile the codes before returning (default: True).
+
+    Returns:
+        List of genetic codes.
+    """
+    if not os.path.exists(filepath):
+        logging.error("Input file does not exist: %s", filepath)
+        return []
+    
+    with open(filepath, 'r') as f:
+        lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+    
+    if should_compile:
+        compiled_codes = []
+        for line in lines:
+            code = line.upper()
+            if code in parameters.OPERATIONS:
+                compiled_codes.append(parameters.OPERATIONS[code][0])
+            else:
+                # Split into codons and compile if necessary
+                codons = [code[i:i + parameters.CODON_SIZE] 
+                          for i in range(0, len(code), parameters.CODON_SIZE)]
+                if all(codon in sum(parameters.OPERATIONS.values(), []) or 
+                       (len(codon) == parameters.CODON_SIZE and all(c in 'ATGCU' for c in codon)) 
+                       for codon in codons):
+                    compiled_codes.append(code)
+                else:
+                    # Treat as high-level ops
+                    compiled_codes.append(compile_code([code]))
+        return compiled_codes
+    return lines
+
+def write_output_file(filepath: str, run_number: int, best_agent: Optional['Agent'], sim: 'Simulation') -> None:
+    """
+    Write simulation results to an output file.
+
+    Args:
+        filepath: Path to the output file.
+        run_number: Current simulation run number.
+        best_agent: Best agent from the simulation.
+        sim: Simulation instance.
+    """
+    with open(filepath, 'a') as f:
+        if best_agent:
+            fitness = sim.evaluate_fitness(best_agent)
+            f.write(f"Run {run_number}, Generation {sim.generation}, "
+                    f"Best Agent (family_id={best_agent.family_id}), "
+                    f"Fitness: {fitness:.3f}, Code: {best_agent.code}, "
+                    f"Progeny Code: {best_agent.progeny_code}\n")
+        else:
+            f.write(f"Run {run_number}: No valid agents\n")
+
+def run_simulation(population_size: int, generations: int, max_steps: int, max_runs: int, 
+                   input_file: Optional[str], output_file: Optional[str], verbose: bool, 
+                   should_compile: bool = True) -> None:
+    """
+    Run genetic simulations with the specified parameters.
+
+    Args:
+        population_size: Number of agents in the population.
+        generations: Number of generations per run.
+        max_steps: Maximum execution steps per agent.
+        max_runs: Number of simulation runs.
+        input_file: Optional path to input file with initial codes.
+        output_file: Optional path to output file for results.
+        verbose: If True, enable DYNAMIC_MODE for detailed output.
+        should_compile: If True, compile input file codes before use.
+    """
+    parameters.DYNAMIC_MODE = verbose
+    population_size = min(population_size, parameters.MAX_PROGENY)
+    generations = min(generations, parameters.MAX_ITERATIONS)
+    max_steps = min(max_steps, parameters.MAX_ITERATIONS)
+    max_runs = max(max_runs, 1)
+
+    # Load initial codes if provided
+    initial_codes = None
+    if input_file:
+        logging.info("Loading initial codes from %s%s", input_file, " with compilation" if should_compile else "")
+        initial_codes = load_input_file(input_file, should_compile=should_compile)
+
+    for run in range(1, max_runs + 1):
+        logging.info("Running simulation %d/%d...", run, max_runs)
+        sim = Simulation(population_size=population_size, max_generations=generations, 
+                         max_steps=max_steps, initial_codes=initial_codes, max_attempts=100)
+        best_agent = sim.run_simulation()
+
+        # Log results
+        if best_agent:
+            logging.info("Run %d completed after %d generations", run, sim.generation)
+            logging.info("Best agent (family_id=%d):", best_agent.family_id)
+            logging.info("  Code: %s", best_agent.code)
+            logging.info("  Progeny code: %s", best_agent.progeny_code)
+            logging.info("  Fitness: %.3f", sim.evaluate_fitness(best_agent))
+        else:
+            logging.warning("Run %d failed: No agents in population", run)
+
+        # Write to output file if specified
+        if output_file:
+            write_output_file(output_file, run, best_agent, sim)
+
+def main():
+    """Main function to parse arguments and run the framework."""
+    parser = argparse.ArgumentParser(description="GeneticAlphabet2.2 Framework")
+    parser.add_argument("--mode", choices=["simulation", "interpreter", "cross-reference"], 
+                        default="simulation", help="Operation mode")
+    parser.add_argument("--input-file", type=str, help="Input file with initial codes or commands")
+    parser.add_argument("--output-file", type=str, help="Output file for results")
+    parser.add_argument("--log-file", type=str, default="genetic_alphabet.log", 
+                        help="Log file path")
+    parser.add_argument("--population-size", type=int, default=10, 
+                        help="Population size for simulation")
+    parser.add_argument("--generations", type=int, default=100, 
+                        help="Number of generations for simulation")
+    parser.add_argument("--max-steps", type=int, default=100, 
+                        help="Maximum execution steps per agent")
+    parser.add_argument("--max-runs", type=int, default=1, 
+                        help="Number of simulation runs")
+    parser.add_argument("--num-random", type=int, default=100, 
+                        help="Number of random sequences for cross-reference")
+    parser.add_argument("--verbose", action="store_true", 
+                        help="Enable verbose logging (DYNAMIC_MODE)")
+    parser.add_argument("--compile", action="store_true", 
+                        help="Compile input file codes before simulation")
+
+    args = parser.parse_args()
+
+    # Setup logging
+    logging.basicConfig(filename=args.log_file, level=logging.DEBUG if args.verbose else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.mode == "simulation":
+        run_simulation(args.population_size, args.generations, args.max_steps, 
+                       args.max_runs, args.input_file, args.output_file, 
+                       args.verbose, args.compile)
+    elif args.mode == "interpreter":
+        run_interpreter(args.input_file, args.verbose)
+    elif args.mode == "cross-reference":
+        initial_codes = None
+        if args.input_file:
+            initial_codes = load_input_file(args.input_file, args.compile)
+        cross_reference.run_cross_reference(
+            population_size=args.population_size,
+            max_generations=args.generations,
+            max_steps=args.max_steps,
+            num_random=args.num_random,
+            initial_codes=initial_codes,
+            output_prefix="cross_reference"
+        )
+
+if __name__ == "__main__":
+    main()
+parameters.py
+#!/usr/bin/env python3
+
+"""Global configuration parameters for the genetic simulation."""
+
+from typing import Dict, List, Set
+import sys
+
+# Simulation limits
+MAX_ITERATIONS: int = 1000
+"""Maximum number of iterations for a simulation run."""
+MAX_GENE_SIZE: int = 1024
+"""Maximum size of a genetic sequence in codons."""
+MID_GENE_SIZE: int = 10
+"""Typical size for initializing genetic sequences."""
+MIN_GENE_SIZE: int = 2
+"""Minimum size of a genetic sequence in codons."""
+MAX_PROGENY: int = 128
+"""Maximum number of progeny sequences."""
+MAX_PRODUCT_SIZE: int = 1024
+"""Maximum size of product code."""
+CODON_SIZE: int = 3
+"""Size of each codon in characters."""
+
+# Runtime configuration
+DYNAMIC_MODE: bool = False
+"""Enable dynamic execution mode for debugging."""
+DYNAMIC_INSTRUCTIONS: int = 0
+"""Counter for dynamically executed instructions."""
+
+# Instruction set
+INSTRUCTIONS: List[str] = [
+    "AAA", "AAU", "AAG", "AAC", "AUA", "AUU", "AUG", "AUC",
+    "AGA", "AGU", "AGG", "AGC", "ACA", "ACU", "ACG", "ACC",
+    "UAA", "UAU", "UAG", "UAC", "UUA", "UUU", "UUG", "UUC",
+    "UGA", "UGU", "UGG", "UGC", "UCA", "UCU", "UCG", "UCC",
+    "GAA", "GAU", "GAG", "GAC", "GUA", "GUU", "GUG", "GUC",
+    "GGA", "GGU", "GGG", "GGC", "GCA", "GCU", "GCG", "GCC",
+    "CAA", "CAU", "CAG", "CAC", "CUA", "CUU", "CUG", "CUC",
+    "CGA", "CGU", "CGG", "CGC", "CCA", "CCU", "CCG", "CCC",
+    "ATC", "ATG"  # Added to support STOP codons
+]
+"""List of all valid codons, each of length CODON_SIZE."""
+
+OPERATIONS: Dict[str, List[str]] = {
+    "COND": ["UUC", "UUA", "GAA"],
+    "COPY": ["AAG"],
+    "IF": ["AAU"],
+    "JUMP": ["CUU"],
+    "START": ["AAA"],
+    "STOP": ["AUA", "ATC", "ATG"]
+}
+"""Dictionary mapping operation names to their corresponding codons."""
+
+# Derived sets for efficient lookups
+NO_OPS: Set[str] = set(INSTRUCTIONS) - set(sum(OPERATIONS.values(), []))
+"""Set of codons that do not correspond to any operation."""
+
+# Validation
+def validate_parameters() -> None:
+    """Validate the configuration parameters to ensure consistency."""
+    # Check codon size
+    if CODON_SIZE != 3:
+        raise ValueError(f"CODON_SIZE must be 3, got {CODON_SIZE}")
+
+    # Check all instructions are of correct length
+    for codon in INSTRUCTIONS:
+        if len(codon) != CODON_SIZE:
+            raise ValueError(f"Invalid codon length for {codon}, expected {CODON_SIZE}")
+
+    # Check for duplicate codons in INSTRUCTIONS
+    if len(INSTRUCTIONS) != len(set(INSTRUCTIONS)):
+        raise ValueError("Duplicate codons found in INSTRUCTIONS")
+
+    # Check all operation codons are valid
+    all_op_codons = set(sum(OPERATIONS.values(), []))
+    invalid_ops = all_op_codons - set(INSTRUCTIONS)
+    if invalid_ops:
+        raise ValueError(
+            f"Operation codons not in INSTRUCTIONS: {invalid_ops}. "
+            f"Check OPERATIONS dictionary for invalid codons."
+        )
+
+    # Check for overlapping operation codons
+    seen_codons: Set[str] = set()
+    for op, codons in OPERATIONS.items():
+        for codon in codons:
+            if codon in seen_codons:
+                raise ValueError(f"Codon {codon} assigned to multiple operations in OPERATIONS")
+            seen_codons.add(codon)
+
+    # Check NO_OPS
+    expected_no_ops = set(INSTRUCTIONS) - all_op_codons
+    if NO_OPS != expected_no_ops:
+        raise ValueError("NO_OPS does not match expected non-operational codons")
+
+# Run validation on module import
+validate_parameters()
+
+if __name__ == "__main__":
+    print("Configuration parameters for genetic simulation:")
+    print(f"  Maximum genome size: {MAX_GENE_SIZE}")
+    print(f"  Minimum genome size: {MIN_GENE_SIZE}")
+    print(f"  Maximum product size: {MAX_PRODUCT_SIZE}")
+    print(f"  Codon size: {CODON_SIZE}")
+    print(f"  Number of instructions: {len(INSTRUCTIONS)}")
+    print(f"  Number of operations: {len(OPERATIONS)}")
+    print("\nFor detailed testing, run: pytest tests/test_parameters.py")
+    sys.exit(0)
+simulation.py
+#!/usr/bin/env python3
+
+"""Simulation for evolving a population of genetic agents."""
+
+import random
+from typing import List, Optional
+import logging
+import parameters
+import genetic_strings
+from agent import Agent
+
+class Simulation:
+    def __init__(self, population_size: int, max_generations: int, max_steps: int, 
+                 initial_codes: Optional[List[str]] = None, max_attempts: int = 100):
+        """
+        Initialize the simulation with a population of agents.
+
+        Args:
+            population_size: Number of agents in the population.
+            max_generations: Maximum number of generations to run.
+            max_steps: Maximum execution steps per agent.
+            initial_codes: Optional list of initial genetic codes.
+            max_attempts: Maximum attempts to initialize random agents (default: 100).
+        """
+        self.population_size = min(population_size, parameters.MAX_PROGENY)
+        self.max_generations = min(max_generations, parameters.MAX_ITERATIONS)
+        self.max_steps = min(max_steps, parameters.MAX_ITERATIONS)
+        self.generation = 0
+        self.population: List[Agent] = []
+
+        if initial_codes:
+            for i, code in enumerate(initial_codes[:self.population_size]):
+                agent = Agent(family_id=i)
+                if agent.init(code):
+                    self.population.append(agent)
+                else:
+                    logging.warning("Failed to initialize agent with code: %s", code)
+
+        # Try to fill remaining population with random codes
+        attempts = 0
+        while len(self.population) < self.population_size and attempts < max_attempts:
+            code = genetic_strings.create_string()
+            agent = Agent(family_id=len(self.population))
+            if agent.init(code):
+                self.population.append(agent)
+            else:
+                logging.warning("Failed to initialize agent with random code")
+            attempts += 1
+
+        if not self.population:
+            logging.error("Failed to initialize any agents after %d attempts", max_attempts)
+            self.population = []
+
+    def evaluate_fitness(self, agent: Agent) -> float:
+        """
+        Evaluate the fitness of an agent based on its progeny code entropy.
+
+        Args:
+            agent: The agent to evaluate.
+
+        Returns:
+            The fitness score (entropy of progeny code or code).
+        """
+        code = agent.progeny_code or agent.code
+        fitness = genetic_strings.entropy(code)
+        if parameters.DYNAMIC_MODE:
+            logging.debug("Agent (family_id=%d) fitness: %.3f (code: %s)", 
+                          agent.family_id, fitness, code)
+        return fitness
+
+    def select_parents(self) -> List[Agent]:
+        """
+        Select parents for the next generation using tournament selection.
+
+        Returns:
+            List of selected parent agents.
+        """
+        tournament_size = min(3, len(self.population))
+        parents = []
+        for _ in range(self.population_size):
+            tournament = random.sample(self.population, tournament_size)
+            best = max(tournament, key=self.evaluate_fitness, default=None)
+            if best:
+                parents.append(best)
+        return parents
+
+    def run_simulation(self) -> Optional[Agent]:
+        """
+        Run the simulation for the specified number of generations.
+
+        Returns:
+            The best agent from the final generation, or None if population is empty.
+        """
+        if not self.population:
+            logging.error("Cannot run simulation: Empty population")
+            return None
+
+        for gen in range(self.max_generations):
+            self.generation = gen + 1
+            if parameters.DYNAMIC_MODE:
+                logging.debug("Generation %d/%d", self.generation, self.max_generations)
+
+            # Evaluate and select parents
+            parents = self.select_parents()
+            if not parents:
+                logging.warning("No parents selected for generation %d", self.generation)
+                break
+
+            # Create new population
+            new_population = []
+            for i in range(self.population_size):
+                parent = random.choice(parents)
+                code = genetic_strings.mutate(parent.code)
+                agent = Agent(family_id=i)
+                if agent.init(code):
+                    new_population.append(agent)
+                    if parameters.DYNAMIC_MODE:
+                        logging.debug("New agent (family_id=%d) code: %s", i, code)
+                else:
+                    logging.warning("Failed to initialize new agent with code: %s", code)
+
+            self.population = new_population if new_population else self.population
+
+            # Check for convergence or empty population
+            if not self.population:
+                logging.error("Population extinct at generation %d", self.generation)
+                return None
+
+            # Log generation summary
+            best_agent = max(self.population, key=self.evaluate_fitness, default=None)
+            if best_agent and parameters.DYNAMIC_MODE:
+                logging.debug("Best fitness in generation %d: %.3f", 
+                              self.generation, self.evaluate_fitness(best_agent))
+
+        # Return the best agent
+        best_agent = max(self.population, key=self.evaluate_fitness, default=None)
+        if best_agent:
+            logging.info("Simulation completed. Best agent (family_id=%d) fitness: %.3f", 
+                         best_agent.family_id, self.evaluate_fitness(best_agent))
+        else:
+            logging.warning("No best agent found")
+        return best_agent
+#!/usr/bin/env python3
+
+"""Unit tests for agent module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+from agent import Agent
+import parameters
+import genetic_strings
+
+class TestAgent(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.agent = Agent(family_id=0)
+        parameters.OPERATIONS = {
+            "START": ["AAA"],
+            "STOP": ["AUA"],
+            "COPY": ["AGA"]
+        }
+        parameters.CODON_SIZE = 3
+        parameters.DYNAMIC_MODE = True
+
+    def test_init_valid_code(self):
+        """Test initialization with valid code."""
+        self.assertTrue(self.agent.init("AAAAAA"))
+        self.assertEqual(self.agent.code, "AAAAAA")
+        self.assertEqual(self.agent.tape, ["AAA", "AAA"])
+
+    def test_init_invalid_code(self):
+        """Test initialization with invalid code."""
+        with self.assertLogs(level='ERROR') as cm:
+            self.assertFalse(self.agent.init("INVALID"))
+            self.assertIn("Invalid code for agent (family_id=0): INVALID", 
+                          cm.output[0])
+
+    def test_iteration_copy(self):
+        """Test iteration with COPY operation."""
+        self.agent.init("AGAAGA")
+        self.assertFalse(self.agent.iteration())  # First COPY
+        self.assertEqual(self.agent.progeny_code, "AGA")
+        self.assertFalse(self.agent.iteration())  # Second COPY
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+        self.assertTrue(self.agent.iteration())  # End of code
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+
+    def test_iteration_short_code(self):
+        """Test iteration with short code."""
+        self.agent.init("AAA")
+        self.assertFalse(self.agent.iteration())  # Data codon (START or data)
+        self.assertEqual(self.agent.progeny_code, "AAA")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_iteration_data_codon(self):
+        """Test iteration with data codon."""
+        self.agent.init("UUU")
+        self.assertFalse(self.agent.iteration())  # Data codon
+        self.assertEqual(self.agent.progeny_code, "UUU")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_mutate(self):
+        """Test mutation of code."""
+        self.agent.init("AAAAAA")
+        with patch('genetic_strings.mutate', return_value="AAACCC"):
+            self.agent.mutate()
+            self.assertEqual(self.agent.code, "AAACCC")
+
+    def test_evaluate_fitness(self):
+        """Test fitness evaluation."""
+        self.agent.init("AAAAAA")
+        self.agent.progeny_code = "AAAAAA"
+        with patch('genetic_strings.entropy', return_value=1.0):
+            fitness = self.agent.evaluate_fitness()
+            self.assertEqual(fitness, 6.0)
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for checks module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+import checks
+
+class TestChecks(unittest.TestCase):
+    def test_check_list_valid(self):
+        """Test check_list with a valid code string."""
+        valid_code = "AAAAAA"  # Two valid codons
+        self.assertTrue(checks.check_list(valid_code))
+
+    def test_check_list_invalid_codon(self):
+        """Test check_list with an invalid codon."""
+        invalid_code = "AAAAAF"  # 'AAF' is not in INSTRUCTIONS
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_wrong_length(self):
+        """Test check_list with a code string of incorrect length."""
+        invalid_code = "AAAA"  # Length 4, not a multiple of CODON_SIZE (3)
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_empty(self):
+        """Test check_list with an empty string."""
+        self.assertFalse(checks.check_list(""))
+
+    def test_is_executable_valid(self):
+        """Test is_executable with valid instruction lists."""
+        for stop_codon in parameters.OPERATIONS["STOP"]:
+            instructions = [parameters.OPERATIONS["START"][0], stop_codon]
+            self.assertTrue(checks.is_executable(instructions), f"Failed for STOP codon {stop_codon}")
+
+    def test_is_executable_no_stop(self):
+        """Test is_executable with a START but no STOP."""
+        instructions = [parameters.OPERATIONS["START"][0], parameters.OPERATIONS["START"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+    def test_is_executable_empty(self):
+        """Test is_executable with an empty instruction list."""
+        self.assertFalse(checks.is_executable([]))
+
+    def test_is_executable_no_start(self):
+        """Test is_executable with a STOP but no START."""
+        instructions = [parameters.OPERATIONS["STOP"][0], parameters.OPERATIONS["COPY"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for genetic_strings module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import random
+import parameters
+from genetic_strings import entropy, create_codon, create_string, mutate
+
+class TestGeneticStrings(unittest.TestCase):
+    def setUp(self):
+        """Set up a consistent random seed for reproducible tests."""
+        random.seed(42)
+
+    def test_entropy_empty(self):
+        """Test entropy for an empty string."""
+        self.assertEqual(entropy(""), 0.0)
+
+    def test_entropy_single_codon(self):
+        """Test entropy for a single codon."""
+        result = entropy("AAA")
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_entropy_multiple_codons(self):
+        """Test entropy for a string with multiple codons."""
+        code = "AAAAAA"  # Two AAA codons
+        result = entropy(code)
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_create_codon(self):
+        """Test create_codon returns a valid codon."""
+        codon = create_codon()
+        self.assertIn(codon, parameters.INSTRUCTIONS)
+        self.assertEqual(len(codon), parameters.CODON_SIZE)
+
+    def test_create_string(self):
+        """Test create_string generates a valid string."""
+        code = create_string()
+        self.assertEqual(len(code) % parameters.CODON_SIZE, 0)
+        self.assertGreaterEqual(len(code), parameters.MIN_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertLessEqual(len(code), parameters.MID_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertTrue(
+            all(code[i:i + parameters.CODON_SIZE] in parameters.INSTRUCTIONS
+                for i in range(0, len(code), parameters.CODON_SIZE))
+        )
+
+    def test_mutate_no_change(self):
+        """Test mutate with a no-op mutation."""
+        code = "AAAAAA"
+        random.seed(7)  # No-op index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)
+
+    def test_mutate_append(self):
+        """Test mutate with append mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until append occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.startswith(code):
+                break
+        else:
+            self.fail(f"No append mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.startswith(code))
+        self.assertIn(mutated[-parameters.CODON_SIZE:], parameters.INSTRUCTIONS)
+
+    def test_mutate_prepend(self):
+        """Test mutate with prepend mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until prepend occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.endswith(code):
+                break
+        else:
+            self.fail(f"No prepend mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.endswith(code))
+        self.assertIn(mutated[:parameters.CODON_SIZE], parameters.INSTRUCTIONS)
+
+    def test_mutate_reverse(self):
+        """Test mutate with reverse mutation."""
+        code = "AAAAAA"
+        random.seed(6)  # Reverse index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)  # Reverse of identical codons is same
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for geneticeditor module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch, MagicMock
+from PyQt5.QtWidgets import QApplication, QTextBrowser, QTableWidgetItem
+from geneticeditor import Ui_MainWindow
+import parameters
+
+class TestGeneticEditor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Initialize QApplication for all tests."""
+        cls.app = QApplication(sys.argv)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up QApplication."""
+        del cls.app
+
+    def setUp(self):
+        """Set up test environment."""
+        self.ui = Ui_MainWindow()
+        # Mock GUI elements
+        self.ui.compiledWindow = MagicMock(spec=QTextBrowser)
+        self.ui.codeWindow = MagicMock(spec=QTextBrowser)
+        self.ui.tableData = MagicMock()
+        self.ui.statusbar = MagicMock()
+        self.ui.a = MagicMock()  # Mock agent
+
+    def test_compile_code_valid(self):
+        """Test compileCode with valid high-level code."""
+        self.ui.codeWindow.toPlainText.return_value = "START STOP"
+        self.ui.compileCode()
+        self.ui.compiledWindow.setText.assert_called_with(
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_empty(self):
+        """Test compileCode with empty input."""
+        self.ui.codeWindow.toPlainText.return_value = ""
+        result = self.ui.compileCode()
+        self.assertEqual(result, 1)
+        self.ui.compiledWindow.setText.assert_not_called()
+
+    def test_decompile_code_valid(self):
+        """Test decompileCode with valid codon sequence."""
+        self.ui.compiledWindow.toPlainText.return_value = (
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+        self.ui.decompileCode()
+        self.ui.codeWindow.setText.assert_called_with("START STOP")
+
+    def test_decompile_code_empty(self):
+        """Test decompileCode with empty input."""
+        self.ui.compiledWindow.toPlainText.return_value = ""
+        result = self.ui.decompileCode()
+        self.assertEqual(result, 1)
+        self.ui.codeWindow.setText.assert_not_called()
+
+    def test_load_data_valid(self):
+        """Test loadData with valid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadData()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_data_invalid(self):
+        """Test loadData with invalid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadData()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+    def test_load_progeny_code_valid(self):
+        """Test loadProgenyCode with valid progeny code."""
+        self.ui.progeny = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadProgenyCode()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_progeny_code_invalid(self):
+        """Test loadProgenyCode with invalid progeny code."""
+        self.ui.progeny = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadProgenyCode()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for interpreter module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+from unittest.mock import patch
+from interpreter import compile_code, tokenize_code, decompile_code, compress_code, run_interpreter
+import parameters
+
+class TestInterpreter(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_compile_code(self):
+        """Test compile_code with high-level operations."""
+        lines = ["START STOP"]
+        result = compile_code(lines)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_invalid(self):
+        """Test compile_code with invalid operations."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            lines = ["INVALID"]
+            result = compile_code(lines)
+            self.assertEqual(result, "")
+            mocked_warning.assert_called_with("Skipping invalid instruction: %s", "INVALID")
+
+    def test_tokenize_code(self):
+        """Test tokenize_code splits code into codons."""
+        code = "AAAAUA"
+        result = tokenize_code(code)
+        self.assertEqual(result, ["AAA", "AUA"])
+
+    def test_decompile_code(self):
+        """Test decompile_code converts codons to operations."""
+        code = parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0]
+        result = decompile_code(code)
+        self.assertEqual(result, "START STOP")
+
+    def test_compress_code(self):
+        """Test compress_code keeps only operational codons."""
+        code = "AAAUUUAUA"  # START, NO_OP, STOP
+        result = compress_code(code)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter exits on quit."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter processes input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for main module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+import logging
+from unittest.mock import patch
+from main import load_input_file, write_output_file, run_simulation, run_interpreter
+from simulation import Simulation
+from agent import Agent
+import parameters
+
+class TestMain(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+        self.output_file = os.path.join(self.temp_dir.name, "output.txt")
+        logging.getLogger().setLevel(logging.CRITICAL)  # Suppress logging
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_load_input_file(self):
+        """Test load_input_file reads and compiles codes by default."""
+        with open(self.input_file, 'w') as f:
+            f.write("START COPY STOP\n# Comment\nAAA\n")
+        
+        # Test with default compilation
+        codes = load_input_file(self.input_file)
+        expected = [parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["COPY"][0] + 
+                    parameters.OPERATIONS["STOP"][0], "AAA"]
+        self.assertEqual(codes, expected)
+        
+        # Test without compilation
+        codes = load_input_file(self.input_file, should_compile=False)
+        self.assertEqual(codes, ["START COPY STOP", "AAA"])
+
+    def test_load_input_file_nonexistent(self):
+        """Test load_input_file handles nonexistent file."""
+        codes = load_input_file("nonexistent.txt")
+        self.assertEqual(codes, [])
+
+    def test_write_output_file(self):
+        """Test write_output_file saves correct results."""
+        sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        best_agent = sim.run_simulation()
+        
+        write_output_file(self.output_file, 1, best_agent, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+        if best_agent:
+            self.assertIn(f"family_id={best_agent.family_id}", content)
+            self.assertIn(f"Code: {best_agent.code}", content)
+
+    def test_write_output_file_no_agent(self):
+        """Test write_output_file handles no valid agents."""
+        sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+        write_output_file(self.output_file, 1, None, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertEqual(content, "Run 1: No valid agents\n")
+
+    def test_run_simulation_default(self):
+        """Test run_simulation with default settings."""
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=10, generations=1, max_steps=100, max_runs=1,
+                           input_file=None, output_file=None, verbose=False)
+            self.assertTrue(mocked_info.called)
+
+    def test_run_simulation_with_input_output(self):
+        """Test run_simulation with input and output files."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAAAAA\nAAAATC")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=2, generations=1, max_steps=100, max_runs=1,
+                           input_file=self.input_file, output_file=self.output_file, 
+                           verbose=False, should_compile=True)
+            self.assertTrue(mocked_info.called)
+        
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter without input file."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter with input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for parameters module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+
+class TestParameters(unittest.TestCase):
+    def test_simulation_limits(self):
+        """Test simulation limit constants."""
+        self.assertEqual(parameters.MAX_ITERATIONS, 1000)
+        self.assertEqual(parameters.MAX_GENE_SIZE, 1024)
+        self.assertEqual(parameters.MID_GENE_SIZE, 10)
+        self.assertEqual(parameters.MIN_GENE_SIZE, 2)
+        self.assertEqual(parameters.MAX_PROGENY, 128)
+        self.assertEqual(parameters.MAX_PRODUCT_SIZE, 1024)
+        self.assertEqual(parameters.CODON_SIZE, 3)
+
+    def test_runtime_configuration(self):
+        """Test runtime configuration defaults."""
+        self.assertFalse(parameters.DYNAMIC_MODE)
+        self.assertEqual(parameters.DYNAMIC_INSTRUCTIONS, 0)
+
+    def test_instructions(self):
+        """Test the INSTRUCTIONS list."""
+        self.assertEqual(len(parameters.INSTRUCTIONS), 66)  # 64 original + ATC, ATG
+        self.assertTrue(all(len(codon) == parameters.CODON_SIZE for codon in parameters.INSTRUCTIONS))
+        self.assertEqual(len(parameters.INSTRUCTIONS), len(set(parameters.INSTRUCTIONS)))  # No duplicates
+        self.assertIn("AAA", parameters.INSTRUCTIONS)
+        self.assertIn("ATC", parameters.INSTRUCTIONS)
+        self.assertIn("ATG", parameters.INSTRUCTIONS)
+
+    def test_operations(self):
+        """Test the OPERATIONS dictionary."""
+        expected_ops = {
+            "COND": ["UUC", "UUA", "GAA"],
+            "COPY": ["AAG"],
+            "IF": ["AAU"],
+            "JUMP": ["CUU"],
+            "START": ["AAA"],
+            "STOP": ["AUA", "ATC", "ATG"]
+        }
+        self.assertEqual(parameters.OPERATIONS, expected_ops)
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        self.assertTrue(all(codon in parameters.INSTRUCTIONS for codon in all_op_codons))
+
+    def test_no_ops(self):
+        """Test the NO_OPS set."""
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        expected_no_ops = set(parameters.INSTRUCTIONS) - all_op_codons
+        self.assertEqual(parameters.NO_OPS, expected_no_ops)
+        self.assertEqual(len(parameters.NO_OPS), len(parameters.INSTRUCTIONS) - len(all_op_codons))
+
+    def test_validate_parameters_codon_size(self):
+        """Test validation raises error for invalid CODON_SIZE."""
+        original = parameters.CODON_SIZE
+        parameters.CODON_SIZE = 4
+        with self.assertRaisesRegex(ValueError, "CODON_SIZE must be 3"):
+            parameters.validate_parameters()
+        parameters.CODON_SIZE = original
+
+    def test_validate_parameters_duplicate_instructions(self):
+        """Test validation raises error for duplicate INSTRUCTIONS."""
+        original = parameters.INSTRUCTIONS
+        parameters.INSTRUCTIONS = ["AAA", "AAA"]
+        with self.assertRaisesRegex(ValueError, "Duplicate codons found"):
+            parameters.validate_parameters()
+        parameters.INSTRUCTIONS = original
+
+    def test_validate_parameters_invalid_ops(self):
+        """Test validation raises error for invalid operation codons."""
+        original = parameters.OPERATIONS
+        parameters.OPERATIONS["STOP"] = ["XYZ"]
+        with self.assertRaisesRegex(ValueError, "Operation codons not in INSTRUCTIONS"):
+            parameters.validate_parameters()
+        parameters.OPERATIONS = original
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for simulation module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+import parameters
+from simulation import Simulation
+from agent import Agent
+
+class TestSimulation(unittest.TestCase):
+    def setUp(self):
+        """Set up simulation parameters."""
+        self.valid_codes = ["AAAAAA", "AAAATC"]
+
+    def test_init_with_valid_codes(self):
+        """Test Simulation initialization with valid initial codes."""
+        sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes)
+        self.assertEqual(len(sim.population), 2)
+        self.assertEqual(sim.population[0].code, self.valid_codes[0])
+        self.assertEqual(sim.population[1].code, self.valid_codes[1])
+
+    def test_init_with_invalid_codes(self):
+        """Test Simulation initialization with invalid codes."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                             initial_codes=["AAAA", "BBBB"])
+            self.assertTrue(mocked_warning.called)
+            self.assertGreaterEqual(len(sim.population), 0)
+
+    def test_init_empty_population(self):
+        """Test Simulation initialization with no valid codes."""
+        with patch('agent.Agent.init', return_value=False):
+            with patch('logging.Logger.error') as mocked_error:
+                sim = Simulation(population_size=2, max_generations=1, max_steps=100, max_attempts=10)
+                self.assertEqual(len(sim.population), 0)
+                mocked_error.assert_called_with("Failed to initialize any agents after %d attempts", 10)
+
+    def test_evaluate_fitness(self):
+        """Test evaluate_fitness calculates entropy correctly."""
+        sim = Simulation(population_size=1, max_generations=10, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        agent = sim.population[0]
+        fitness = sim.evaluate_fitness(agent)
+        self.assertGreaterEqual(fitness, 0.0)
+
+    def test_select_parents(self):
+        """Test select_parents returns valid parents."""
+        sim = Simulation(population_size=3, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes + ["AAAAAA"])
+        parents = sim.select_parents()
+        self.assertEqual(len(parents), sim.population_size)
+        for parent in parents:
+            self.assertIn(parent, sim.population)
+
+    def test_run_simulation(self):
+        """Test run_simulation completes and returns best agent."""
+        with patch('logging.Logger.info') as mocked_info:
+            sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                             initial_codes=self.valid_codes)
+            best_agent = sim.run_simulation()
+            self.assertTrue(mocked_info.called)
+            self.assertIn(best_agent, sim.population)
+
+    def test_run_simulation_empty(self):
+        """Test run_simulation with empty population."""
+        with patch('logging.Logger.error') as mocked_error:
+            sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+            best_agent = sim.run_simulation()
+            self.assertIsNone(best_agent)
+            mocked_error.assert_called_with("Cannot run simulation: Empty population")
+
+if __name__ == '__main__':
+    unittest.main()

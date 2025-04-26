@@ -191,4 +191,4 @@ python3 geneticeditor.py
   - Click Load Progeny to view progeny_code results.
 
 ## License
-This project is licensed under the MIT License. See the LICENSE file for details (create one if needed).
+This project is licensed under the MIT License. See the LICENSE file for details.

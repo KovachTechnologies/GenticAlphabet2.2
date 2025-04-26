@@ -8,7 +8,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import unittest
 import tempfile
-import logging
 from unittest.mock import patch
 from interpreter import compile_code, tokenize_code, decompile_code, compress_code, run_interpreter
 import parameters
@@ -18,8 +17,6 @@ class TestInterpreter(unittest.TestCase):
         """Set up test environment."""
         self.temp_dir = tempfile.TemporaryDirectory()
         self.input_file = os.path.join(self.temp_dir.name, "input.txt")
-        # Configure logging to match runtime
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     def tearDown(self):
         """Clean up test environment."""
@@ -60,19 +57,18 @@ class TestInterpreter(unittest.TestCase):
     def test_run_interpreter_no_input(self):
         """Test run_interpreter exits on quit."""
         with patch('builtins.input', side_effect=["quit"]):
-            with patch('interpreter.logging.info') as mocked_info:
+            with patch('logging.Logger.info') as mocked_info:
                 run_interpreter(verbose=False)
                 mocked_info.assert_called_with("Exiting interpreter")
 
     def test_run_interpreter_with_input(self):
         """Test run_interpreter processes input file."""
         with open(self.input_file, 'w') as f:
-            f.write("UUU\nrun\nquit\n")
+            f.write("AAA\nrun\nquit\n")
         
-        with patch('interpreter.logging.info') as mocked_info:
+        with patch('logging.Logger.info') as mocked_info:
             run_interpreter(input_file=self.input_file, verbose=False)
-            print("Mocked info calls:", mocked_info.call_args_list)  # Debug
-            mocked_info.assert_any_call("Execution complete. Progeny code: %s", "UUU")
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
             mocked_info.assert_any_call("Exiting interpreter")
 
 if __name__ == '__main__':

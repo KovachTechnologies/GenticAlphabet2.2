@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+
+"""Module for cross-referencing framework-generated genetic code with random sequences."""
+
+import datetime
+import os
+import random
+import logging
+import pandas as pd
+import matplotlib.pyplot as plt
+from collections import Counter
+from typing import List, Dict, Optional
+import parameters
+import genetic_strings
+from agent import Agent
+from simulation import Simulation
+
+# Directories for outputs
+DATA_DIR = "data/cross_reference"
+GRAPHS_DIR = "graphs/cross_reference"
+
+# Codon table for amino acid translation (from protein_sequences.py)
+CODON_TABLE = {
+    "UUU": {"name": "Phenylalanine", "abbr": "Phe", "letter": "F"},
+    "UUC": {"name": "Phenylalanine", "abbr": "Phe", "letter": "F"},
+    " UUA": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "UUG": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUU": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUC": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUA": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "CUG": {"name": "Leucine", "abbr": "Leu", "letter": "L"},
+    "AUU": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUC": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUA": {"name": "Isoleucine", "abbr": "Ile", "letter": "I"},
+    "AUG": {"name": "Methionine", "abbr": "Met", "letter": "M", "notes": "Starting Codon"},
+    "GUU": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUC": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUA": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "GUG": {"name": "Valine", "abbr": "Val", "letter": "V"},
+    "UCU": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCC": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCA": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "UCG": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "CCU": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCC": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCA": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "CCG": {"name": "Proline", "abbr": "Pro", "letter": "P"},
+    "ACU": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACC": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACA": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "ACG": {"name": "Threonine", "abbr": "Thr", "letter": "T"},
+    "GCU": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCC": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCA": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "GCG": {"name": "Alanine", "abbr": "Ala", "letter": "A"},
+    "UAU": {"name": "Tyrosine", "abbr": "Tyr", "letter": "Y"},
+    "UAC": {"name": "Tyrosine", "abbr": "Tyr", "letter": "Y"},
+    "UAA": {"name": "Stop", "notes": "codon"},
+    "UAG": {"name": "Stop", "notes": "codon"},
+    "CAU": {"name": "Histidine", "abbr": "His", "letter": "H"},
+    "CAC": {"name": "Histidine", "abbr": "His", "letter": "H"},
+    "CAA": {"name": "Glutamine", "abbr": "Gln", "letter": "Q"},
+    "CAG": {"name": "Glutamine", "abbr": "Gln", "letter": "Q"},
+    "AAU": {"name": "Asparagine", "abbr": "Asn", "letter": "N"},
+    "AAC": {"name": "Asparagine", "abbr": "Asn", "letter": "N"},
+    "AAA": {"name": "Lysine", "abbr": "Lys", "letter": "K"},
+    "AAG": {"name": "Lysine", "abbr": "Lys", "letter": "K"},
+    "GAU": {"name": "Aspartic", "abbr": "Asp", "letter": "D"},
+    "GAC": {"name": "Aspartic", "abbr": "Asp", "letter": "D"},
+    "GAA": {"name": "Glutamic", "abbr": "Glu", "letter": "E"},
+    "GAG": {"name": "Glutamic", "abbr": "Glu", "letter": "E"},
+    "UGU": {"name": "Cysteine", "abbr": "Cys", "letter": "C"},
+    "UGC": {"name": "Cysteine", "abbr": "Cys", "letter": "C"},
+    "UGA": {"name": "Stop", "notes": "codon"},
+    "UGG": {"name": "Tryptophan", "abbr": "Trp", "letter": "W"},
+    "CGU": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGC": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGA": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "CGG": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "AGU": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "AGC": {"name": "Serine", "abbr": "Ser", "letter": "S"},
+    "AGA": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "AGG": {"name": "Arginine", "abbr": "Arg", "letter": "R"},
+    "GGU": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGC": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGA": {"name": "Glycine", "abbr": "Gly", "letter": "G"},
+    "GGG": {"name": "Glycine", "abbr": "Gly", "letter": "G"}
+}
+
+def ensure_directories():
+    """Create data and graphs directories if they don't exist."""
+    for directory in [DATA_DIR, GRAPHS_DIR]:
+        if not os.path.exists(directory):
+            logging.info(f"Creating directory: {directory}")
+            os.makedirs(directory)
+
+def get_nucleotides(code: str) -> str:
+    """Translate genetic code to amino acid sequence using codon table."""
+    tape = [code[i:i + parameters.CODON_SIZE] for i in range(0, len(code), parameters.CODON_SIZE)]
+    amino_acids = ""
+    for codon in tape:
+        if codon in CODON_TABLE and "letter" in CODON_TABLE[codon]:
+            amino_acids += CODON_TABLE[codon]["letter"]
+    return amino_acids
+
+def generate_random_sequences(n: int, lower_bound: int = 7, upper_bound: int = 100) -> List[str]:
+    """Generate random amino acid sequences."""
+    letters = list(set([CODON_TABLE[key]["letter"] for key in CODON_TABLE if "letter" in CODON_TABLE[key]]))
+    sequences = []
+    for _ in range(n):
+        length = random.randint(lower_bound, upper_bound)
+        sequence = "".join(random.choice(letters) for _ in range(length))
+        sequences.append(sequence)
+    return sequences
+
+def collect_framework_sequences(population_size: int, max_generations: int, max_steps: int, 
+                               initial_codes: List[str] = None) -> List[str]:
+    """Run simulation and collect progeny codes."""
+    sim = Simulation(population_size=population_size, max_generations=max_generations, 
+                     max_steps=max_steps, initial_codes=initial_codes)
+    best_agent = sim.run_simulation()
+    sequences = []
+    for agent in sim.population:
+        if agent.progeny_code:
+            sequences.append(agent.progeny_code)
+    if best_agent and best_agent.progeny_code:
+        sequences.append(best_agent.progeny_code)
+    return sequences
+
+def cross_reference_sequences(framework_sequences: List[str], random_sequences: List[str], 
+                             output_prefix: str = "cross_reference", target_peptide: Optional[str] = None) -> None:
+    """Cross-reference framework and random sequences, saving results and visualizations."""
+    ensure_directories()
+    
+    # Convert framework sequences to amino acid sequences
+    framework_amino = [get_nucleotides(seq) for seq in framework_sequences if seq]
+    framework_amino = [seq for seq in framework_amino if seq]  # Filter empty sequences
+    
+    # Compute metrics
+    data = {
+        "type": [],
+        "sequence": [],
+        "length": [],
+        "entropy": [],
+        "amino_count": [],
+        "peptide_match": []
+    }
+    
+    # Process framework sequences
+    for seq, amino_seq in zip(framework_sequences, framework_amino):
+        data["type"].append("framework")
+        data["sequence"].append(amino_seq)
+        data["length"].append(len(amino_seq))
+        data["entropy"].append(genetic_strings.entropy(seq) if seq else 0.0)
+        data["amino_count"].append(len(set(amino_seq)))
+        data["peptide_match"].append(1.0 if target_peptide and target_peptide in amino_seq else 0.0)
+    
+    # Process random sequences
+    for seq in random_sequences:
+        data["type"].append("random")
+        data["sequence"].append(seq)
+        data["length"].append(len(seq))
+        data["entropy"].append(0.0)  # Random sequences are amino acids, not codons
+        data["amino_count"].append(len(set(seq)))
+        data["peptide_match"].append(1.0 if target_peptide and target_peptide in seq else 0.0)
+    
+    # Create DataFrame
+    df = pd.DataFrame(data)
+    
+    # Save results to CSV
+    dt = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    csv_path = os.path.join(DATA_DIR, f"{output_prefix}_{dt}.csv")
+    df.to_csv(csv_path, index=False)
+    logging.info(f"Saved cross-reference data to {csv_path}")
+    
+    # Generate visualizations
+    # 1. Length distribution histogram
+    plt.figure(figsize=(8, 6))
+    df[df["type"] == "framework"]["length"].hist(alpha=0.5, label="Framework", bins=20)
+    df[df["type"] == "random"]["length"].hist(alpha=0.5, label="Random", bins=20)
+    plt.xlabel("Sequence Length")
+    plt.ylabel("Frequency")
+    plt.title("Length Distribution of Framework vs Random Sequences")
+    plt.legend()
+    length_plot_path = os.path.join(GRAPHS_DIR, f"{output_prefix}_length_{dt}.png")
+    plt.savefig(length_plot_path, dpi=300)
+    plt.close()
+    logging.info(f"Saved length distribution plot to {length_plot_path}")
+    
+    # 2. Amino acid count scatter plot
+    plt.figure(figsize=(8, 6))
+    plt.scatter(df[df["type"] == "framework"]["length"], 
+                df[df["type"] == "framework"]["amino_count"], 
+                alpha=0.5, label="Framework")
+    plt.scatter(df[df["type"] == "random"]["length"], 
+                df[df["type"] == "random"]["amino_count"], 
+                alpha=0.5, label="Random")
+    plt.xlabel("Sequence Length")
+    plt.ylabel("Unique Amino Acids")
+    plt.title("Amino Acid Diversity vs Sequence Length")
+    plt.legend()
+    scatter_plot_path = os.path.join(GRAPHS_DIR, f"{output_prefix}_amino_count_{dt}.png")
+    plt.savefig(scatter_plot_path, dpi=300)
+    plt.close()
+    logging.info(f"Saved amino acid count plot to {scatter_plot_path}")
+    
+    # 3. Peptide match histogram
+    plt.figure(figsize=(8, 6))
+    df[df["type"] == "framework"]["peptide_match"].hist(alpha=0.5, label="Framework", bins=2)
+    df[df["type"] == "random"]["peptide_match"].hist(alpha=0.5, label="Random", bins=2)
+    plt.xlabel("Peptide Match (1=Match, 0=No Match)")
+    plt.ylabel("Frequency")
+    plt.title(f"Peptide Match Distribution for Target: {target_peptide or 'None'}")
+    plt.legend()
+    match_plot_path = os.path.join(GRAPHS_DIR, f"{output_prefix}_peptide_match_{dt}.png")
+    plt.savefig(match_plot_path, dpi=300)
+    plt.close()
+    logging.info(f"Saved peptide match plot to {match_plot_path}")
+    
+    # Log summary statistics
+    framework_stats = df[df["type"] == "framework"].describe()
+    random_stats = df[df["type"] == "random"].describe()
+    logging.info("Framework Sequence Statistics:\n%s", framework_stats)
+    logging.info("Random Sequence Statistics:\n%s", random_stats)
+
+def run_cross_reference(population_size: int = 10, max_generations: int = 10, 
+                        max_steps: int = 100, num_random: int = 100, 
+                        initial_codes: List[str] = None, output_prefix: str = "cross_reference",
+                        target_peptide: Optional[str] = None) -> None:
+    """Run cross-referencing experiment."""
+    logging.info("Starting cross-reference experiment")
+    
+    # Collect framework sequences
+    framework_sequences = collect_framework_sequences(population_size, max_generations, 
+                                                     max_steps, initial_codes)
+    logging.info(f"Collected {len(framework_sequences)} framework sequences")
+    
+    # Generate random sequences
+    random_sequences = generate_random_sequences(num_random)
+    logging.info(f"Generated {len(random_sequences)} random sequences")
+    
+    # Cross-reference and save results
+    cross_reference_sequences(framework_sequences, random_sequences, output_prefix, target_peptide)
+    logging.info("Cross-reference experiment completed")
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Cross-reference framework and random genetic sequences")
+    parser.add_argument("--population-size", type=int, default=10, help="Population size for simulation")
+    parser.add_argument("--max-generations", type=int, default=10, help="Maximum generations for simulation")
+    parser.add_argument("--max-steps", type=int, default=100, help="Maximum steps per agent")
+    parser.add_argument("--num-random", type=int, default=100, help="Number of random sequences to generate")
+    parser.add_argument("--input-file", type=str, help="Input file with initial codes")
+    parser.add_argument("--output-prefix", type=str, default="cross_reference", help="Prefix for output files")
+    parser.add_argument("--log-file", type=str, default="cross_reference.log", help="Log file path")
+    parser.add_argument("--target-peptide", type=str, help="Target peptide sequence to search for")
+    
+    args = parser.parse_args()
+    
+    # Setup logging
+    logging.basicConfig(filename=args.log_file, level=logging.INFO, 
+                        format="%(asctime)s %(levelname)s %(message)s")
+    
+    # Load initial codes if provided
+    initial_codes = None
+    if args.input_file:
+        with open(args.input_file, 'r') as f:
+            initial_codes = [line.strip() for line in f if line.strip()]
+    
+    run_cross_reference(args.population_size, args.max_generations, args.max_steps, 
+                        args.num_random, initial_codes, args.output_prefix, args.target_peptide)

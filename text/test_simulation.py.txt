@@ -75,16 +75,5 @@ class TestSimulation(unittest.TestCase):
             self.assertIsNone(best_agent)
             mocked_error.assert_called_with("Cannot run simulation: Empty population")
 
-    def test_simulation_with_peptide(self):
-        """Test simulation with target peptide."""
-        sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
-                         initial_codes=["UUUUUC", "AAAAAA"], target_peptide="FF")
-        best_agent = sim.run_simulation()
-        self.assertIsNotNone(best_agent)
-        print("Best agent progeny_code:", best_agent.progeny_code, 
-              "Peptide:", best_agent.translate_to_peptide())  # Debug
-        self.assertTrue("FF" in best_agent.translate_to_peptide())  # Allow mutations
-        self.assertGreater(sim.evaluate_fitness(best_agent), 0.0)
-
 if __name__ == '__main__':
     unittest.main()

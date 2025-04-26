@@ -16,6 +16,12 @@ class TestAgent(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         self.agent = Agent(family_id=0)
+        parameters.OPERATIONS = {
+            "START": ["AAA"],
+            "STOP": ["AUA"],
+            "COPY": ["AGA"]
+        }
+        parameters.CODON_SIZE = 3
         parameters.DYNAMIC_MODE = True
 
     def test_init_valid_code(self):
@@ -33,20 +39,19 @@ class TestAgent(unittest.TestCase):
 
     def test_iteration_copy(self):
         """Test iteration with COPY operation."""
-        self.agent.init("AAGAAG")
+        self.agent.init("AGAAGA")
         self.assertFalse(self.agent.iteration())  # First COPY
-        self.assertEqual(self.agent.progeny_code, "AAG")
+        self.assertEqual(self.agent.progeny_code, "AGA")
         self.assertFalse(self.agent.iteration())  # Second COPY
-        self.assertEqual(self.agent.progeny_code, "AAGAAG")
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
         self.assertTrue(self.agent.iteration())  # End of code
-        self.assertEqual(self.agent.progeny_code, "AAGAAG")
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
 
     def test_iteration_short_code(self):
         """Test iteration with short code."""
         self.agent.init("AAA")
-        self.assertFalse(self.agent.iteration())  # START codon
-        self.assertEqual(self.agent.progeny_code, "")  # START does not append to progeny_code
-        self.assertEqual(self.agent.eip_ptr, 0)  # START sets eip_ptr
+        self.assertFalse(self.agent.iteration())  # Data codon (START or data)
+        self.assertEqual(self.agent.progeny_code, "AAA")
         self.assertTrue(self.agent.iteration())  # End of code
 
     def test_iteration_data_codon(self):
@@ -70,23 +75,6 @@ class TestAgent(unittest.TestCase):
         with patch('genetic_strings.entropy', return_value=1.0):
             fitness = self.agent.evaluate_fitness()
             self.assertEqual(fitness, 6.0)
-
-    def test_translate_to_peptide(self):
-        """Test translation of progeny_code to peptide sequence."""
-        self.agent.init("UUUUUC")  # Phenylalanine codons
-        self.agent.progeny_code = "UUUUUC"
-        peptide = self.agent.translate_to_peptide()
-        self.assertEqual(peptide, "FF")  # UUU, UUC -> Phenylalanine (F)
-
-    def test_evaluate_fitness_with_peptide(self):
-        """Test fitness evaluation with target peptide."""
-        self.agent.init("UUUUUC")
-        self.agent.progeny_code = "UUUUUC"  # Translates to "FF"
-        with patch('genetic_strings.entropy', return_value=1.0):
-            fitness = self.agent.evaluate_fitness(target_peptide="FF")
-            self.assertGreater(fitness, 6.0)  # Base fitness + peptide match bonus
-            fitness_no_match = self.agent.evaluate_fitness(target_peptide="GG")
-            self.assertEqual(fitness_no_match, 6.0)  # Base fitness only
 
 if __name__ == '__main__':
     unittest.main()

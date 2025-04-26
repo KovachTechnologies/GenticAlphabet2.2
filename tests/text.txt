@@ -1,0 +1,1391 @@
+#!/usr/bin/env python3
+
+"""Unit tests for agent module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+from agent import Agent
+import parameters
+import genetic_strings
+
+class TestAgent(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.agent = Agent(family_id=0)
+        parameters.OPERATIONS = {
+            "START": ["AAA"],
+            "STOP": ["AUA"],
+            "COPY": ["AGA"]
+        }
+        parameters.CODON_SIZE = 3
+        parameters.DYNAMIC_MODE = True
+
+    def test_init_valid_code(self):
+        """Test initialization with valid code."""
+        self.assertTrue(self.agent.init("AAAAAA"))
+        self.assertEqual(self.agent.code, "AAAAAA")
+        self.assertEqual(self.agent.tape, ["AAA", "AAA"])
+
+    def test_init_invalid_code(self):
+        """Test initialization with invalid code."""
+        with self.assertLogs(level='ERROR') as cm:
+            self.assertFalse(self.agent.init("INVALID"))
+            self.assertIn("Invalid code for agent (family_id=0): INVALID", 
+                          cm.output[0])
+
+    def test_iteration_copy(self):
+        """Test iteration with COPY operation."""
+        self.agent.init("AGAAGA")
+        self.assertFalse(self.agent.iteration())  # First COPY
+        self.assertEqual(self.agent.progeny_code, "AGA")
+        self.assertFalse(self.agent.iteration())  # Second COPY
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+        self.assertTrue(self.agent.iteration())  # End of code
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+
+    def test_iteration_short_code(self):
+        """Test iteration with short code."""
+        self.agent.init("AAA")
+        self.assertFalse(self.agent.iteration())  # Data codon (START or data)
+        self.assertEqual(self.agent.progeny_code, "AAA")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_iteration_data_codon(self):
+        """Test iteration with data codon."""
+        self.agent.init("UUU")
+        self.assertFalse(self.agent.iteration())  # Data codon
+        self.assertEqual(self.agent.progeny_code, "UUU")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_mutate(self):
+        """Test mutation of code."""
+        self.agent.init("AAAAAA")
+        with patch('genetic_strings.mutate', return_value="AAACCC"):
+            self.agent.mutate()
+            self.assertEqual(self.agent.code, "AAACCC")
+
+    def test_evaluate_fitness(self):
+        """Test fitness evaluation."""
+        self.agent.init("AAAAAA")
+        self.agent.progeny_code = "AAAAAA"
+        with patch('genetic_strings.entropy', return_value=1.0):
+            fitness = self.agent.evaluate_fitness()
+            self.assertEqual(fitness, 6.0)
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for checks module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+import checks
+
+class TestChecks(unittest.TestCase):
+    def test_check_list_valid(self):
+        """Test check_list with a valid code string."""
+        valid_code = "AAAAAA"  # Two valid codons
+        self.assertTrue(checks.check_list(valid_code))
+
+    def test_check_list_invalid_codon(self):
+        """Test check_list with an invalid codon."""
+        invalid_code = "AAAAAF"  # 'AAF' is not in INSTRUCTIONS
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_wrong_length(self):
+        """Test check_list with a code string of incorrect length."""
+        invalid_code = "AAAA"  # Length 4, not a multiple of CODON_SIZE (3)
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_empty(self):
+        """Test check_list with an empty string."""
+        self.assertFalse(checks.check_list(""))
+
+    def test_is_executable_valid(self):
+        """Test is_executable with valid instruction lists."""
+        for stop_codon in parameters.OPERATIONS["STOP"]:
+            instructions = [parameters.OPERATIONS["START"][0], stop_codon]
+            self.assertTrue(checks.is_executable(instructions), f"Failed for STOP codon {stop_codon}")
+
+    def test_is_executable_no_stop(self):
+        """Test is_executable with a START but no STOP."""
+        instructions = [parameters.OPERATIONS["START"][0], parameters.OPERATIONS["START"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+    def test_is_executable_empty(self):
+        """Test is_executable with an empty instruction list."""
+        self.assertFalse(checks.is_executable([]))
+
+    def test_is_executable_no_start(self):
+        """Test is_executable with a STOP but no START."""
+        instructions = [parameters.OPERATIONS["STOP"][0], parameters.OPERATIONS["COPY"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for genetic_strings module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import random
+import parameters
+from genetic_strings import entropy, create_codon, create_string, mutate
+
+class TestGeneticStrings(unittest.TestCase):
+    def setUp(self):
+        """Set up a consistent random seed for reproducible tests."""
+        random.seed(42)
+
+    def test_entropy_empty(self):
+        """Test entropy for an empty string."""
+        self.assertEqual(entropy(""), 0.0)
+
+    def test_entropy_single_codon(self):
+        """Test entropy for a single codon."""
+        result = entropy("AAA")
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_entropy_multiple_codons(self):
+        """Test entropy for a string with multiple codons."""
+        code = "AAAAAA"  # Two AAA codons
+        result = entropy(code)
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_create_codon(self):
+        """Test create_codon returns a valid codon."""
+        codon = create_codon()
+        self.assertIn(codon, parameters.INSTRUCTIONS)
+        self.assertEqual(len(codon), parameters.CODON_SIZE)
+
+    def test_create_string(self):
+        """Test create_string generates a valid string."""
+        code = create_string()
+        self.assertEqual(len(code) % parameters.CODON_SIZE, 0)
+        self.assertGreaterEqual(len(code), parameters.MIN_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertLessEqual(len(code), parameters.MID_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertTrue(
+            all(code[i:i + parameters.CODON_SIZE] in parameters.INSTRUCTIONS
+                for i in range(0, len(code), parameters.CODON_SIZE))
+        )
+
+    def test_mutate_no_change(self):
+        """Test mutate with a no-op mutation."""
+        code = "AAAAAA"
+        random.seed(7)  # No-op index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)
+
+    def test_mutate_append(self):
+        """Test mutate with append mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until append occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.startswith(code):
+                break
+        else:
+            self.fail(f"No append mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.startswith(code))
+        self.assertIn(mutated[-parameters.CODON_SIZE:], parameters.INSTRUCTIONS)
+
+    def test_mutate_prepend(self):
+        """Test mutate with prepend mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until prepend occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.endswith(code):
+                break
+        else:
+            self.fail(f"No prepend mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.endswith(code))
+        self.assertIn(mutated[:parameters.CODON_SIZE], parameters.INSTRUCTIONS)
+
+    def test_mutate_reverse(self):
+        """Test mutate with reverse mutation."""
+        code = "AAAAAA"
+        random.seed(6)  # Reverse index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)  # Reverse of identical codons is same
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for geneticeditor module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch, MagicMock
+from PyQt5.QtWidgets import QApplication, QTextBrowser, QTableWidgetItem
+from geneticeditor import Ui_MainWindow
+import parameters
+
+class TestGeneticEditor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Initialize QApplication for all tests."""
+        cls.app = QApplication(sys.argv)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up QApplication."""
+        del cls.app
+
+    def setUp(self):
+        """Set up test environment."""
+        self.ui = Ui_MainWindow()
+        # Mock GUI elements
+        self.ui.compiledWindow = MagicMock(spec=QTextBrowser)
+        self.ui.codeWindow = MagicMock(spec=QTextBrowser)
+        self.ui.tableData = MagicMock()
+        self.ui.statusbar = MagicMock()
+        self.ui.a = MagicMock()  # Mock agent
+
+    def test_compile_code_valid(self):
+        """Test compileCode with valid high-level code."""
+        self.ui.codeWindow.toPlainText.return_value = "START STOP"
+        self.ui.compileCode()
+        self.ui.compiledWindow.setText.assert_called_with(
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_empty(self):
+        """Test compileCode with empty input."""
+        self.ui.codeWindow.toPlainText.return_value = ""
+        result = self.ui.compileCode()
+        self.assertEqual(result, 1)
+        self.ui.compiledWindow.setText.assert_not_called()
+
+    def test_decompile_code_valid(self):
+        """Test decompileCode with valid codon sequence."""
+        self.ui.compiledWindow.toPlainText.return_value = (
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+        self.ui.decompileCode()
+        self.ui.codeWindow.setText.assert_called_with("START STOP")
+
+    def test_decompile_code_empty(self):
+        """Test decompileCode with empty input."""
+        self.ui.compiledWindow.toPlainText.return_value = ""
+        result = self.ui.decompileCode()
+        self.assertEqual(result, 1)
+        self.ui.codeWindow.setText.assert_not_called()
+
+    def test_load_data_valid(self):
+        """Test loadData with valid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadData()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_data_invalid(self):
+        """Test loadData with invalid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadData()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+    def test_load_progeny_code_valid(self):
+        """Test loadProgenyCode with valid progeny code."""
+        self.ui.progeny = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadProgenyCode()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_progeny_code_invalid(self):
+        """Test loadProgenyCode with invalid progeny code."""
+        self.ui.progeny = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadProgenyCode()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for interpreter module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+from unittest.mock import patch
+from interpreter import compile_code, tokenize_code, decompile_code, compress_code, run_interpreter
+import parameters
+
+class TestInterpreter(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_compile_code(self):
+        """Test compile_code with high-level operations."""
+        lines = ["START STOP"]
+        result = compile_code(lines)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_invalid(self):
+        """Test compile_code with invalid operations."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            lines = ["INVALID"]
+            result = compile_code(lines)
+            self.assertEqual(result, "")
+            mocked_warning.assert_called_with("Skipping invalid instruction: %s", "INVALID")
+
+    def test_tokenize_code(self):
+        """Test tokenize_code splits code into codons."""
+        code = "AAAAUA"
+        result = tokenize_code(code)
+        self.assertEqual(result, ["AAA", "AUA"])
+
+    def test_decompile_code(self):
+        """Test decompile_code converts codons to operations."""
+        code = parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0]
+        result = decompile_code(code)
+        self.assertEqual(result, "START STOP")
+
+    def test_compress_code(self):
+        """Test compress_code keeps only operational codons."""
+        code = "AAAUUUAUA"  # START, NO_OP, STOP
+        result = compress_code(code)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter exits on quit."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter processes input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for main module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+import logging
+from unittest.mock import patch
+from main import load_input_file, write_output_file, run_simulation, run_interpreter
+from simulation import Simulation
+from agent import Agent
+import parameters
+
+class TestMain(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+        self.output_file = os.path.join(self.temp_dir.name, "output.txt")
+        logging.getLogger().setLevel(logging.CRITICAL)  # Suppress logging
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_load_input_file(self):
+        """Test load_input_file reads and compiles codes by default."""
+        with open(self.input_file, 'w') as f:
+            f.write("START COPY STOP\n# Comment\nAAA\n")
+        
+        # Test with default compilation
+        codes = load_input_file(self.input_file)
+        expected = [parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["COPY"][0] + 
+                    parameters.OPERATIONS["STOP"][0], "AAA"]
+        self.assertEqual(codes, expected)
+        
+        # Test without compilation
+        codes = load_input_file(self.input_file, should_compile=False)
+        self.assertEqual(codes, ["START COPY STOP", "AAA"])
+
+    def test_load_input_file_nonexistent(self):
+        """Test load_input_file handles nonexistent file."""
+        codes = load_input_file("nonexistent.txt")
+        self.assertEqual(codes, [])
+
+    def test_write_output_file(self):
+        """Test write_output_file saves correct results."""
+        sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        best_agent = sim.run_simulation()
+        
+        write_output_file(self.output_file, 1, best_agent, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+        if best_agent:
+            self.assertIn(f"family_id={best_agent.family_id}", content)
+            self.assertIn(f"Code: {best_agent.code}", content)
+
+    def test_write_output_file_no_agent(self):
+        """Test write_output_file handles no valid agents."""
+        sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+        write_output_file(self.output_file, 1, None, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertEqual(content, "Run 1: No valid agents\n")
+
+    def test_run_simulation_default(self):
+        """Test run_simulation with default settings."""
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=10, generations=1, max_steps=100, max_runs=1,
+                           input_file=None, output_file=None, verbose=False)
+            self.assertTrue(mocked_info.called)
+
+    def test_run_simulation_with_input_output(self):
+        """Test run_simulation with input and output files."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAAAAA\nAAAATC")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=2, generations=1, max_steps=100, max_runs=1,
+                           input_file=self.input_file, output_file=self.output_file, 
+                           verbose=False, should_compile=True)
+            self.assertTrue(mocked_info.called)
+        
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter without input file."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter with input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for parameters module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+
+class TestParameters(unittest.TestCase):
+    def test_simulation_limits(self):
+        """Test simulation limit constants."""
+        self.assertEqual(parameters.MAX_ITERATIONS, 1000)
+        self.assertEqual(parameters.MAX_GENE_SIZE, 1024)
+        self.assertEqual(parameters.MID_GENE_SIZE, 10)
+        self.assertEqual(parameters.MIN_GENE_SIZE, 2)
+        self.assertEqual(parameters.MAX_PROGENY, 128)
+        self.assertEqual(parameters.MAX_PRODUCT_SIZE, 1024)
+        self.assertEqual(parameters.CODON_SIZE, 3)
+
+    def test_runtime_configuration(self):
+        """Test runtime configuration defaults."""
+        self.assertFalse(parameters.DYNAMIC_MODE)
+        self.assertEqual(parameters.DYNAMIC_INSTRUCTIONS, 0)
+
+    def test_instructions(self):
+        """Test the INSTRUCTIONS list."""
+        self.assertEqual(len(parameters.INSTRUCTIONS), 66)  # 64 original + ATC, ATG
+        self.assertTrue(all(len(codon) == parameters.CODON_SIZE for codon in parameters.INSTRUCTIONS))
+        self.assertEqual(len(parameters.INSTRUCTIONS), len(set(parameters.INSTRUCTIONS)))  # No duplicates
+        self.assertIn("AAA", parameters.INSTRUCTIONS)
+        self.assertIn("ATC", parameters.INSTRUCTIONS)
+        self.assertIn("ATG", parameters.INSTRUCTIONS)
+
+    def test_operations(self):
+        """Test the OPERATIONS dictionary."""
+        expected_ops = {
+            "COND": ["UUC", "UUA", "GAA"],
+            "COPY": ["AAG"],
+            "IF": ["AAU"],
+            "JUMP": ["CUU"],
+            "START": ["AAA"],
+            "STOP": ["AUA", "ATC", "ATG"]
+        }
+        self.assertEqual(parameters.OPERATIONS, expected_ops)
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        self.assertTrue(all(codon in parameters.INSTRUCTIONS for codon in all_op_codons))
+
+    def test_no_ops(self):
+        """Test the NO_OPS set."""
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        expected_no_ops = set(parameters.INSTRUCTIONS) - all_op_codons
+        self.assertEqual(parameters.NO_OPS, expected_no_ops)
+        self.assertEqual(len(parameters.NO_OPS), len(parameters.INSTRUCTIONS) - len(all_op_codons))
+
+    def test_validate_parameters_codon_size(self):
+        """Test validation raises error for invalid CODON_SIZE."""
+        original = parameters.CODON_SIZE
+        parameters.CODON_SIZE = 4
+        with self.assertRaisesRegex(ValueError, "CODON_SIZE must be 3"):
+            parameters.validate_parameters()
+        parameters.CODON_SIZE = original
+
+    def test_validate_parameters_duplicate_instructions(self):
+        """Test validation raises error for duplicate INSTRUCTIONS."""
+        original = parameters.INSTRUCTIONS
+        parameters.INSTRUCTIONS = ["AAA", "AAA"]
+        with self.assertRaisesRegex(ValueError, "Duplicate codons found"):
+            parameters.validate_parameters()
+        parameters.INSTRUCTIONS = original
+
+    def test_validate_parameters_invalid_ops(self):
+        """Test validation raises error for invalid operation codons."""
+        original = parameters.OPERATIONS
+        parameters.OPERATIONS["STOP"] = ["XYZ"]
+        with self.assertRaisesRegex(ValueError, "Operation codons not in INSTRUCTIONS"):
+            parameters.validate_parameters()
+        parameters.OPERATIONS = original
+
+if __name__ == '__main__':
+    unittest.main()
+#!/usr/bin/env python3
+
+"""Unit tests for simulation module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+import parameters
+from simulation import Simulation
+from agent import Agent
+
+class TestSimulation(unittest.TestCase):
+    def setUp(self):
+        """Set up simulation parameters."""
+        self.valid_codes = ["AAAAAA", "AAAATC"]
+
+    def test_init_with_valid_codes(self):
+        """Test Simulation initialization with valid initial codes."""
+        sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes)
+        self.assertEqual(len(sim.population), 2)
+        self.assertEqual(sim.population[0].code, self.valid_codes[0])
+        self.assertEqual(sim.population[1].code, self.valid_codes[1])
+
+    def test_init_with_invalid_codes(self):
+        """Test Simulation initialization with invalid codes."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                             initial_codes=["AAAA", "BBBB"])
+            self.assertTrue(mocked_warning.called)
+            self.assertGreaterEqual(len(sim.population), 0)
+
+    def test_init_empty_population(self):
+        """Test Simulation initialization with no valid codes."""
+        with patch('agent.Agent.init', return_value=False):
+            with patch('logging.Logger.error') as mocked_error:
+                sim = Simulation(population_size=2, max_generations=1, max_steps=100, max_attempts=10)
+                self.assertEqual(len(sim.population), 0)
+                mocked_error.assert_called_with("Failed to initialize any agents after %d attempts", 10)
+
+    def test_evaluate_fitness(self):
+        """Test evaluate_fitness calculates entropy correctly."""
+        sim = Simulation(population_size=1, max_generations=10, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        agent = sim.population[0]
+        fitness = sim.evaluate_fitness(agent)
+        self.assertGreaterEqual(fitness, 0.0)
+
+    def test_select_parents(self):
+        """Test select_parents returns valid parents."""
+        sim = Simulation(population_size=3, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes + ["AAAAAA"])
+        parents = sim.select_parents()
+        self.assertEqual(len(parents), sim.population_size)
+        for parent in parents:
+            self.assertIn(parent, sim.population)
+
+    def test_run_simulation(self):
+        """Test run_simulation completes and returns best agent."""
+        with patch('logging.Logger.info') as mocked_info:
+            sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                             initial_codes=self.valid_codes)
+            best_agent = sim.run_simulation()
+            self.assertTrue(mocked_info.called)
+            self.assertIn(best_agent, sim.population)
+
+    def test_run_simulation_empty(self):
+        """Test run_simulation with empty population."""
+        with patch('logging.Logger.error') as mocked_error:
+            sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+            best_agent = sim.run_simulation()
+            self.assertIsNone(best_agent)
+            mocked_error.assert_called_with("Cannot run simulation: Empty population")
+
+if __name__ == '__main__':
+    unittest.main()
+__init__.py
+test_agent.py
+#!/usr/bin/env python3
+
+"""Unit tests for agent module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+from agent import Agent
+import parameters
+import genetic_strings
+
+class TestAgent(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.agent = Agent(family_id=0)
+        parameters.OPERATIONS = {
+            "START": ["AAA"],
+            "STOP": ["AUA"],
+            "COPY": ["AGA"]
+        }
+        parameters.CODON_SIZE = 3
+        parameters.DYNAMIC_MODE = True
+
+    def test_init_valid_code(self):
+        """Test initialization with valid code."""
+        self.assertTrue(self.agent.init("AAAAAA"))
+        self.assertEqual(self.agent.code, "AAAAAA")
+        self.assertEqual(self.agent.tape, ["AAA", "AAA"])
+
+    def test_init_invalid_code(self):
+        """Test initialization with invalid code."""
+        with self.assertLogs(level='ERROR') as cm:
+            self.assertFalse(self.agent.init("INVALID"))
+            self.assertIn("Invalid code for agent (family_id=0): INVALID", 
+                          cm.output[0])
+
+    def test_iteration_copy(self):
+        """Test iteration with COPY operation."""
+        self.agent.init("AGAAGA")
+        self.assertFalse(self.agent.iteration())  # First COPY
+        self.assertEqual(self.agent.progeny_code, "AGA")
+        self.assertFalse(self.agent.iteration())  # Second COPY
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+        self.assertTrue(self.agent.iteration())  # End of code
+        self.assertEqual(self.agent.progeny_code, "AGAAGA")
+
+    def test_iteration_short_code(self):
+        """Test iteration with short code."""
+        self.agent.init("AAA")
+        self.assertFalse(self.agent.iteration())  # Data codon (START or data)
+        self.assertEqual(self.agent.progeny_code, "AAA")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_iteration_data_codon(self):
+        """Test iteration with data codon."""
+        self.agent.init("UUU")
+        self.assertFalse(self.agent.iteration())  # Data codon
+        self.assertEqual(self.agent.progeny_code, "UUU")
+        self.assertTrue(self.agent.iteration())  # End of code
+
+    def test_mutate(self):
+        """Test mutation of code."""
+        self.agent.init("AAAAAA")
+        with patch('genetic_strings.mutate', return_value="AAACCC"):
+            self.agent.mutate()
+            self.assertEqual(self.agent.code, "AAACCC")
+
+    def test_evaluate_fitness(self):
+        """Test fitness evaluation."""
+        self.agent.init("AAAAAA")
+        self.agent.progeny_code = "AAAAAA"
+        with patch('genetic_strings.entropy', return_value=1.0):
+            fitness = self.agent.evaluate_fitness()
+            self.assertEqual(fitness, 6.0)
+
+if __name__ == '__main__':
+    unittest.main()
+test_checks.py
+#!/usr/bin/env python3
+
+"""Unit tests for checks module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+import checks
+
+class TestChecks(unittest.TestCase):
+    def test_check_list_valid(self):
+        """Test check_list with a valid code string."""
+        valid_code = "AAAAAA"  # Two valid codons
+        self.assertTrue(checks.check_list(valid_code))
+
+    def test_check_list_invalid_codon(self):
+        """Test check_list with an invalid codon."""
+        invalid_code = "AAAAAF"  # 'AAF' is not in INSTRUCTIONS
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_wrong_length(self):
+        """Test check_list with a code string of incorrect length."""
+        invalid_code = "AAAA"  # Length 4, not a multiple of CODON_SIZE (3)
+        self.assertFalse(checks.check_list(invalid_code))
+
+    def test_check_list_empty(self):
+        """Test check_list with an empty string."""
+        self.assertFalse(checks.check_list(""))
+
+    def test_is_executable_valid(self):
+        """Test is_executable with valid instruction lists."""
+        for stop_codon in parameters.OPERATIONS["STOP"]:
+            instructions = [parameters.OPERATIONS["START"][0], stop_codon]
+            self.assertTrue(checks.is_executable(instructions), f"Failed for STOP codon {stop_codon}")
+
+    def test_is_executable_no_stop(self):
+        """Test is_executable with a START but no STOP."""
+        instructions = [parameters.OPERATIONS["START"][0], parameters.OPERATIONS["START"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+    def test_is_executable_empty(self):
+        """Test is_executable with an empty instruction list."""
+        self.assertFalse(checks.is_executable([]))
+
+    def test_is_executable_no_start(self):
+        """Test is_executable with a STOP but no START."""
+        instructions = [parameters.OPERATIONS["STOP"][0], parameters.OPERATIONS["COPY"][0]]
+        self.assertFalse(checks.is_executable(instructions))
+
+if __name__ == '__main__':
+    unittest.main()
+test_genetic_strings.py
+#!/usr/bin/env python3
+
+"""Unit tests for genetic_strings module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import random
+import parameters
+from genetic_strings import entropy, create_codon, create_string, mutate
+
+class TestGeneticStrings(unittest.TestCase):
+    def setUp(self):
+        """Set up a consistent random seed for reproducible tests."""
+        random.seed(42)
+
+    def test_entropy_empty(self):
+        """Test entropy for an empty string."""
+        self.assertEqual(entropy(""), 0.0)
+
+    def test_entropy_single_codon(self):
+        """Test entropy for a single codon."""
+        result = entropy("AAA")
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_entropy_multiple_codons(self):
+        """Test entropy for a string with multiple codons."""
+        code = "AAAAAA"  # Two AAA codons
+        result = entropy(code)
+        self.assertIsInstance(result, float)
+        self.assertGreaterEqual(result, 0.0)
+
+    def test_create_codon(self):
+        """Test create_codon returns a valid codon."""
+        codon = create_codon()
+        self.assertIn(codon, parameters.INSTRUCTIONS)
+        self.assertEqual(len(codon), parameters.CODON_SIZE)
+
+    def test_create_string(self):
+        """Test create_string generates a valid string."""
+        code = create_string()
+        self.assertEqual(len(code) % parameters.CODON_SIZE, 0)
+        self.assertGreaterEqual(len(code), parameters.MIN_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertLessEqual(len(code), parameters.MID_GENE_SIZE * parameters.CODON_SIZE)
+        self.assertTrue(
+            all(code[i:i + parameters.CODON_SIZE] in parameters.INSTRUCTIONS
+                for i in range(0, len(code), parameters.CODON_SIZE))
+        )
+
+    def test_mutate_no_change(self):
+        """Test mutate with a no-op mutation."""
+        code = "AAAAAA"
+        random.seed(7)  # No-op index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)
+
+    def test_mutate_append(self):
+        """Test mutate with append mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until append occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.startswith(code):
+                break
+        else:
+            self.fail(f"No append mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.startswith(code))
+        self.assertIn(mutated[-parameters.CODON_SIZE:], parameters.INSTRUCTIONS)
+
+    def test_mutate_prepend(self):
+        """Test mutate with prepend mutation."""
+        code = "AAA"
+        mutated = None
+        for seed in range(1000):  # Try seeds until prepend occurs
+            random.seed(seed)
+            mutated = mutate(code)
+            if len(mutated) == len(code) + parameters.CODON_SIZE and mutated.endswith(code):
+                break
+        else:
+            self.fail(f"No prepend mutation found in 1000 seeds; last mutated: {mutated}")
+        self.assertEqual(len(mutated), len(code) + parameters.CODON_SIZE)
+        self.assertTrue(mutated.endswith(code))
+        self.assertIn(mutated[:parameters.CODON_SIZE], parameters.INSTRUCTIONS)
+
+    def test_mutate_reverse(self):
+        """Test mutate with reverse mutation."""
+        code = "AAAAAA"
+        random.seed(6)  # Reverse index
+        mutated = mutate(code)
+        self.assertEqual(mutated, code)  # Reverse of identical codons is same
+
+if __name__ == '__main__':
+    unittest.main()
+test_geneticeditor.py
+#!/usr/bin/env python3
+
+"""Unit tests for geneticeditor module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch, MagicMock
+from PyQt5.QtWidgets import QApplication, QTextBrowser, QTableWidgetItem
+from geneticeditor import Ui_MainWindow
+import parameters
+
+class TestGeneticEditor(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Initialize QApplication for all tests."""
+        cls.app = QApplication(sys.argv)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up QApplication."""
+        del cls.app
+
+    def setUp(self):
+        """Set up test environment."""
+        self.ui = Ui_MainWindow()
+        # Mock GUI elements
+        self.ui.compiledWindow = MagicMock(spec=QTextBrowser)
+        self.ui.codeWindow = MagicMock(spec=QTextBrowser)
+        self.ui.tableData = MagicMock()
+        self.ui.statusbar = MagicMock()
+        self.ui.a = MagicMock()  # Mock agent
+
+    def test_compile_code_valid(self):
+        """Test compileCode with valid high-level code."""
+        self.ui.codeWindow.toPlainText.return_value = "START STOP"
+        self.ui.compileCode()
+        self.ui.compiledWindow.setText.assert_called_with(
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_empty(self):
+        """Test compileCode with empty input."""
+        self.ui.codeWindow.toPlainText.return_value = ""
+        result = self.ui.compileCode()
+        self.assertEqual(result, 1)
+        self.ui.compiledWindow.setText.assert_not_called()
+
+    def test_decompile_code_valid(self):
+        """Test decompileCode with valid codon sequence."""
+        self.ui.compiledWindow.toPlainText.return_value = (
+            parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+        self.ui.decompileCode()
+        self.ui.codeWindow.setText.assert_called_with("START STOP")
+
+    def test_decompile_code_empty(self):
+        """Test decompileCode with empty input."""
+        self.ui.compiledWindow.toPlainText.return_value = ""
+        result = self.ui.decompileCode()
+        self.assertEqual(result, 1)
+        self.ui.codeWindow.setText.assert_not_called()
+
+    def test_load_data_valid(self):
+        """Test loadData with valid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadData()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_data_invalid(self):
+        """Test loadData with invalid code."""
+        self.ui.compiledWindow.toPlainText.return_value = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadData()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+    def test_load_progeny_code_valid(self):
+        """Test loadProgenyCode with valid progeny code."""
+        self.ui.progeny = "AAAAAA"
+        self.ui.a.init.return_value = True
+        with patch("interpreter.tokenize_code", return_value=["AAA", "AAA"]):
+            self.ui.loadProgenyCode()
+            self.ui.tableData.setColumnCount.assert_called_with(2)
+            self.ui.tableData.insertRow.assert_called()
+            self.ui.statusbar.showMessage.assert_called_with("Data Loaded!")
+
+    def test_load_progeny_code_invalid(self):
+        """Test loadProgenyCode with invalid progeny code."""
+        self.ui.progeny = "INVALID"
+        self.ui.a.init.return_value = False
+        self.ui.loadProgenyCode()
+        self.ui.statusbar.showMessage.assert_called_with("Code not executable!")
+        self.ui.tableData.setRowCount.assert_called_with(0)
+
+if __name__ == '__main__':
+    unittest.main()
+test_interpreter.py
+#!/usr/bin/env python3
+
+"""Unit tests for interpreter module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+from unittest.mock import patch
+from interpreter import compile_code, tokenize_code, decompile_code, compress_code, run_interpreter
+import parameters
+
+class TestInterpreter(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_compile_code(self):
+        """Test compile_code with high-level operations."""
+        lines = ["START STOP"]
+        result = compile_code(lines)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_compile_code_invalid(self):
+        """Test compile_code with invalid operations."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            lines = ["INVALID"]
+            result = compile_code(lines)
+            self.assertEqual(result, "")
+            mocked_warning.assert_called_with("Skipping invalid instruction: %s", "INVALID")
+
+    def test_tokenize_code(self):
+        """Test tokenize_code splits code into codons."""
+        code = "AAAAUA"
+        result = tokenize_code(code)
+        self.assertEqual(result, ["AAA", "AUA"])
+
+    def test_decompile_code(self):
+        """Test decompile_code converts codons to operations."""
+        code = parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0]
+        result = decompile_code(code)
+        self.assertEqual(result, "START STOP")
+
+    def test_compress_code(self):
+        """Test compress_code keeps only operational codons."""
+        code = "AAAUUUAUA"  # START, NO_OP, STOP
+        result = compress_code(code)
+        self.assertEqual(result, parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["STOP"][0])
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter exits on quit."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter processes input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+test_main.py
+#!/usr/bin/env python3
+
+"""Unit tests for main module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import tempfile
+import logging
+from unittest.mock import patch
+from main import load_input_file, write_output_file, run_simulation, run_interpreter
+from simulation import Simulation
+from agent import Agent
+import parameters
+
+class TestMain(unittest.TestCase):
+    def setUp(self):
+        """Set up test environment."""
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.input_file = os.path.join(self.temp_dir.name, "input.txt")
+        self.output_file = os.path.join(self.temp_dir.name, "output.txt")
+        logging.getLogger().setLevel(logging.CRITICAL)  # Suppress logging
+
+    def tearDown(self):
+        """Clean up test environment."""
+        self.temp_dir.cleanup()
+
+    def test_load_input_file(self):
+        """Test load_input_file reads and compiles codes by default."""
+        with open(self.input_file, 'w') as f:
+            f.write("START COPY STOP\n# Comment\nAAA\n")
+        
+        # Test with default compilation
+        codes = load_input_file(self.input_file)
+        expected = [parameters.OPERATIONS["START"][0] + parameters.OPERATIONS["COPY"][0] + 
+                    parameters.OPERATIONS["STOP"][0], "AAA"]
+        self.assertEqual(codes, expected)
+        
+        # Test without compilation
+        codes = load_input_file(self.input_file, should_compile=False)
+        self.assertEqual(codes, ["START COPY STOP", "AAA"])
+
+    def test_load_input_file_nonexistent(self):
+        """Test load_input_file handles nonexistent file."""
+        codes = load_input_file("nonexistent.txt")
+        self.assertEqual(codes, [])
+
+    def test_write_output_file(self):
+        """Test write_output_file saves correct results."""
+        sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        best_agent = sim.run_simulation()
+        
+        write_output_file(self.output_file, 1, best_agent, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+        if best_agent:
+            self.assertIn(f"family_id={best_agent.family_id}", content)
+            self.assertIn(f"Code: {best_agent.code}", content)
+
+    def test_write_output_file_no_agent(self):
+        """Test write_output_file handles no valid agents."""
+        sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+        write_output_file(self.output_file, 1, None, sim)
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertEqual(content, "Run 1: No valid agents\n")
+
+    def test_run_simulation_default(self):
+        """Test run_simulation with default settings."""
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=10, generations=1, max_steps=100, max_runs=1,
+                           input_file=None, output_file=None, verbose=False)
+            self.assertTrue(mocked_info.called)
+
+    def test_run_simulation_with_input_output(self):
+        """Test run_simulation with input and output files."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAAAAA\nAAAATC")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_simulation(population_size=2, generations=1, max_steps=100, max_runs=1,
+                           input_file=self.input_file, output_file=self.output_file, 
+                           verbose=False, should_compile=True)
+            self.assertTrue(mocked_info.called)
+        
+        with open(self.output_file, 'r') as f:
+            content = f.read()
+        self.assertIn("Run 1", content)
+
+    def test_run_interpreter_no_input(self):
+        """Test run_interpreter without input file."""
+        with patch('builtins.input', side_effect=["quit"]):
+            with patch('logging.Logger.info') as mocked_info:
+                run_interpreter(verbose=False)
+                mocked_info.assert_called_with("Exiting interpreter")
+
+    def test_run_interpreter_with_input(self):
+        """Test run_interpreter with input file."""
+        with open(self.input_file, 'w') as f:
+            f.write("AAA\nrun\nquit\n")
+        
+        with patch('logging.Logger.info') as mocked_info:
+            run_interpreter(input_file=self.input_file, verbose=False)
+            mocked_info.assert_any_call("Execution complete. Progeny code: AAA")
+            mocked_info.assert_any_call("Exiting interpreter")
+
+if __name__ == '__main__':
+    unittest.main()
+test_parameters.py
+#!/usr/bin/env python3
+
+"""Unit tests for parameters module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import parameters
+
+class TestParameters(unittest.TestCase):
+    def test_simulation_limits(self):
+        """Test simulation limit constants."""
+        self.assertEqual(parameters.MAX_ITERATIONS, 1000)
+        self.assertEqual(parameters.MAX_GENE_SIZE, 1024)
+        self.assertEqual(parameters.MID_GENE_SIZE, 10)
+        self.assertEqual(parameters.MIN_GENE_SIZE, 2)
+        self.assertEqual(parameters.MAX_PROGENY, 128)
+        self.assertEqual(parameters.MAX_PRODUCT_SIZE, 1024)
+        self.assertEqual(parameters.CODON_SIZE, 3)
+
+    def test_runtime_configuration(self):
+        """Test runtime configuration defaults."""
+        self.assertFalse(parameters.DYNAMIC_MODE)
+        self.assertEqual(parameters.DYNAMIC_INSTRUCTIONS, 0)
+
+    def test_instructions(self):
+        """Test the INSTRUCTIONS list."""
+        self.assertEqual(len(parameters.INSTRUCTIONS), 66)  # 64 original + ATC, ATG
+        self.assertTrue(all(len(codon) == parameters.CODON_SIZE for codon in parameters.INSTRUCTIONS))
+        self.assertEqual(len(parameters.INSTRUCTIONS), len(set(parameters.INSTRUCTIONS)))  # No duplicates
+        self.assertIn("AAA", parameters.INSTRUCTIONS)
+        self.assertIn("ATC", parameters.INSTRUCTIONS)
+        self.assertIn("ATG", parameters.INSTRUCTIONS)
+
+    def test_operations(self):
+        """Test the OPERATIONS dictionary."""
+        expected_ops = {
+            "COND": ["UUC", "UUA", "GAA"],
+            "COPY": ["AAG"],
+            "IF": ["AAU"],
+            "JUMP": ["CUU"],
+            "START": ["AAA"],
+            "STOP": ["AUA", "ATC", "ATG"]
+        }
+        self.assertEqual(parameters.OPERATIONS, expected_ops)
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        self.assertTrue(all(codon in parameters.INSTRUCTIONS for codon in all_op_codons))
+
+    def test_no_ops(self):
+        """Test the NO_OPS set."""
+        all_op_codons = set(sum(parameters.OPERATIONS.values(), []))
+        expected_no_ops = set(parameters.INSTRUCTIONS) - all_op_codons
+        self.assertEqual(parameters.NO_OPS, expected_no_ops)
+        self.assertEqual(len(parameters.NO_OPS), len(parameters.INSTRUCTIONS) - len(all_op_codons))
+
+    def test_validate_parameters_codon_size(self):
+        """Test validation raises error for invalid CODON_SIZE."""
+        original = parameters.CODON_SIZE
+        parameters.CODON_SIZE = 4
+        with self.assertRaisesRegex(ValueError, "CODON_SIZE must be 3"):
+            parameters.validate_parameters()
+        parameters.CODON_SIZE = original
+
+    def test_validate_parameters_duplicate_instructions(self):
+        """Test validation raises error for duplicate INSTRUCTIONS."""
+        original = parameters.INSTRUCTIONS
+        parameters.INSTRUCTIONS = ["AAA", "AAA"]
+        with self.assertRaisesRegex(ValueError, "Duplicate codons found"):
+            parameters.validate_parameters()
+        parameters.INSTRUCTIONS = original
+
+    def test_validate_parameters_invalid_ops(self):
+        """Test validation raises error for invalid operation codons."""
+        original = parameters.OPERATIONS
+        parameters.OPERATIONS["STOP"] = ["XYZ"]
+        with self.assertRaisesRegex(ValueError, "Operation codons not in INSTRUCTIONS"):
+            parameters.validate_parameters()
+        parameters.OPERATIONS = original
+
+if __name__ == '__main__':
+    unittest.main()
+test_simulation.py
+#!/usr/bin/env python3
+
+"""Unit tests for simulation module."""
+
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+from unittest.mock import patch
+import parameters
+from simulation import Simulation
+from agent import Agent
+
+class TestSimulation(unittest.TestCase):
+    def setUp(self):
+        """Set up simulation parameters."""
+        self.valid_codes = ["AAAAAA", "AAAATC"]
+
+    def test_init_with_valid_codes(self):
+        """Test Simulation initialization with valid initial codes."""
+        sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes)
+        self.assertEqual(len(sim.population), 2)
+        self.assertEqual(sim.population[0].code, self.valid_codes[0])
+        self.assertEqual(sim.population[1].code, self.valid_codes[1])
+
+    def test_init_with_invalid_codes(self):
+        """Test Simulation initialization with invalid codes."""
+        with patch('logging.Logger.warning') as mocked_warning:
+            sim = Simulation(population_size=2, max_generations=10, max_steps=100, 
+                             initial_codes=["AAAA", "BBBB"])
+            self.assertTrue(mocked_warning.called)
+            self.assertGreaterEqual(len(sim.population), 0)
+
+    def test_init_empty_population(self):
+        """Test Simulation initialization with no valid codes."""
+        with patch('agent.Agent.init', return_value=False):
+            with patch('logging.Logger.error') as mocked_error:
+                sim = Simulation(population_size=2, max_generations=1, max_steps=100, max_attempts=10)
+                self.assertEqual(len(sim.population), 0)
+                mocked_error.assert_called_with("Failed to initialize any agents after %d attempts", 10)
+
+    def test_evaluate_fitness(self):
+        """Test evaluate_fitness calculates entropy correctly."""
+        sim = Simulation(population_size=1, max_generations=10, max_steps=100, 
+                         initial_codes=["AAAAAA"])
+        agent = sim.population[0]
+        fitness = sim.evaluate_fitness(agent)
+        self.assertGreaterEqual(fitness, 0.0)
+
+    def test_select_parents(self):
+        """Test select_parents returns valid parents."""
+        sim = Simulation(population_size=3, max_generations=10, max_steps=100, 
+                         initial_codes=self.valid_codes + ["AAAAAA"])
+        parents = sim.select_parents()
+        self.assertEqual(len(parents), sim.population_size)
+        for parent in parents:
+            self.assertIn(parent, sim.population)
+
+    def test_run_simulation(self):
+        """Test run_simulation completes and returns best agent."""
+        with patch('logging.Logger.info') as mocked_info:
+            sim = Simulation(population_size=2, max_generations=1, max_steps=100, 
+                             initial_codes=self.valid_codes)
+            best_agent = sim.run_simulation()
+            self.assertTrue(mocked_info.called)
+            self.assertIn(best_agent, sim.population)
+
+    def test_run_simulation_empty(self):
+        """Test run_simulation with empty population."""
+        with patch('logging.Logger.error') as mocked_error:
+            sim = Simulation(population_size=0, max_generations=1, max_steps=100)
+            best_agent = sim.run_simulation()
+            self.assertIsNone(best_agent)
+            mocked_error.assert_called_with("Cannot run simulation: Empty population")
+
+if __name__ == '__main__':
+    unittest.main()
+__init__.py
+test_agent.py
+test_checks.py
+test_genetic_strings.py
+test_geneticeditor.py
+test_interpreter.py
+test_main.py
+test_parameters.py
+test_simulation.py
+__init__.py
+test_agent.py
+test_checks.py
+test_genetic_strings.py
+test_geneticeditor.py
+test_interpreter.py
+test_main.py
+test_parameters.py
+test_simulation.py
